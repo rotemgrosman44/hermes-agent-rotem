@@ -83,6 +83,7 @@ def _import_sounddevice():
 # ===========================================================================
 DEFAULT_PROVIDER = "edge"
 DEFAULT_EDGE_VOICE = "en-US-AriaNeural"
+EDGE_FALLBACK_VOICES = ("en-US-AndrewMultilingualNeural", "en-US-AriaNeural")
 DEFAULT_ELEVENLABS_VOICE_ID = "pNInz6obpgDQGcFmaJgB"  # Adam
 DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 DEFAULT_ELEVENLABS_STREAMING_MODEL_ID = "eleven_flash_v2_5"
@@ -197,15 +198,34 @@ async def _generate_edge_tts(text: str, output_path: str, tts_config: Dict[str, 
     edge_config = tts_config.get("edge", {})
     voice = edge_config.get("voice", DEFAULT_EDGE_VOICE)
     speed = float(edge_config.get("speed", tts_config.get("speed", 1.0)))
+    voices_to_try = []
+    for candidate in (voice, *EDGE_FALLBACK_VOICES):
+        if candidate and candidate not in voices_to_try:
+            voices_to_try.append(candidate)
 
-    kwargs = {"voice": voice}
+    kwargs = {}
     if speed != 1.0:
         pct = round((speed - 1.0) * 100)
         kwargs["rate"] = f"{pct:+d}%"
 
-    communicate = _edge_tts.Communicate(text, **kwargs)
-    await communicate.save(output_path)
-    return output_path
+    last_error = None
+    for candidate in voices_to_try:
+        try:
+            communicate = _edge_tts.Communicate(text, candidate, **kwargs)
+            await communicate.save(output_path)
+            if candidate != voice:
+                logger.warning("Edge TTS voice '%s' failed earlier; fell back to '%s'", voice, candidate)
+            return output_path
+        except Exception as e:
+            last_error = e
+            logger.warning("Edge TTS voice '%s' failed: %s", candidate, e)
+            try:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+            except OSError:
+                pass
+
+    raise last_error or RuntimeError("Edge TTS failed with all configured fallback voices")
 
 
 # ===========================================================================

@@ -28,28 +28,34 @@ Usage:
     )
 """
 
+import base64
 import json
 import logging
+import mimetypes
 import os
 import datetime
 import threading
 import uuid
+from pathlib import Path
 from typing import Dict, Any, Optional, Union
 from urllib.parse import urlencode
 import fal_client
 from tools.debug_helpers import DebugSession
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
-from tools.tool_backend_helpers import managed_nous_tools_enabled, prefers_gateway
+from tools.tool_backend_helpers import managed_nous_tools_enabled
+from hermes_constants import get_hermes_dir
 
 logger = logging.getLogger(__name__)
 
 # Configuration for image generation
 DEFAULT_MODEL = "fal-ai/flux-2-pro"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-image-preview"
 DEFAULT_ASPECT_RATIO = "landscape"
 DEFAULT_NUM_INFERENCE_STEPS = 50
 DEFAULT_GUIDANCE_SCALE = 4.5
 DEFAULT_NUM_IMAGES = 1
 DEFAULT_OUTPUT_FORMAT = "png"
+DEFAULT_GEMINI_IMAGE_SIZE = "2K"
 
 # Safety settings
 ENABLE_SAFETY_CHECKER = False
@@ -60,6 +66,12 @@ ASPECT_RATIO_MAP = {
     "landscape": "landscape_16_9",
     "square": "square_hd",
     "portrait": "portrait_16_9"
+}
+VALID_ASPECT_RATIOS = list(ASPECT_RATIO_MAP.keys())
+GEMINI_ASPECT_RATIO_MAP = {
+    "landscape": "16:9",
+    "square": "1:1",
+    "portrait": "9:16",
 }
 
 # Configuration for automatic upscaling
@@ -84,6 +96,88 @@ _debug = DebugSession("image_tools", env_var="IMAGE_TOOLS_DEBUG")
 _managed_fal_client = None
 _managed_fal_client_config = None
 _managed_fal_client_lock = threading.Lock()
+
+
+def _get_google_api_key() -> Optional[str]:
+    """Return the configured Google AI Studio key if present."""
+    return os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+
+def _get_preferred_image_model() -> str:
+    """Prefer the explicit Hermes image model override when configured."""
+    return os.getenv("HERMES_IMAGE_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+
+
+def _ensure_generated_image_dir() -> Path:
+    generated_image_dir = get_hermes_dir("cache/generated_images", "generated_images")
+    generated_image_dir.mkdir(parents=True, exist_ok=True)
+    return generated_image_dir
+
+
+def _save_generated_image_bytes(image_bytes: bytes, mime_type: str = "image/png") -> str:
+    """Persist generated image bytes locally so gateway MEDIA delivery can send them."""
+    ext = mimetypes.guess_extension(mime_type) or ".png"
+    if ext == ".jpe":
+        ext = ".jpg"
+    output_path = _ensure_generated_image_dir() / f"gemini_{uuid.uuid4().hex[:12]}{ext}"
+    output_path.write_bytes(image_bytes)
+    return str(output_path)
+
+
+def _generate_with_gemini(prompt: str, aspect_ratio: str) -> Dict[str, Any]:
+    """Generate an image through Gemini's native image generation endpoint."""
+    import requests
+
+    api_key = _get_google_api_key()
+    if not api_key:
+        raise ValueError("GOOGLE_API_KEY or GEMINI_API_KEY environment variable not set")
+
+    model = _get_preferred_image_model()
+    api_aspect_ratio = GEMINI_ASPECT_RATIO_MAP.get(aspect_ratio, GEMINI_ASPECT_RATIO_MAP[DEFAULT_ASPECT_RATIO])
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}],
+        }],
+        "generationConfig": {
+            "imageConfig": {
+                "aspectRatio": api_aspect_ratio,
+                "imageSize": DEFAULT_GEMINI_IMAGE_SIZE,
+            }
+        }
+    }
+
+    response = requests.post(
+        endpoint,
+        headers={
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=240,
+    )
+    response.raise_for_status()
+    response_json = response.json()
+
+    for candidate in response_json.get("candidates", []):
+        content = candidate.get("content") or {}
+        for part in content.get("parts", []):
+            inline = part.get("inlineData") or part.get("inline_data") or {}
+            inline_data = inline.get("data")
+            if inline_data:
+                image_bytes = base64.b64decode(inline_data)
+                mime_type = inline.get("mimeType") or inline.get("mime_type") or "image/png"
+                image_path = _save_generated_image_bytes(image_bytes, mime_type)
+                return {
+                    "provider": "gemini",
+                    "model": model,
+                    "image_path": image_path,
+                    "mime_type": mime_type,
+                    "aspect_ratio": api_aspect_ratio,
+                    "image_size": DEFAULT_GEMINI_IMAGE_SIZE,
+                }
+
+    raise ValueError("Gemini image generation returned no inline image data")
 
 
 def _resolve_managed_fal_gateway():
@@ -409,17 +503,37 @@ def image_generate_tool(
     start_time = datetime.datetime.now()
     
     try:
-        logger.info("Generating %s image(s) with FLUX 2 Pro: %s", num_images, prompt[:80])
+        provider = "gemini" if _get_google_api_key() else "fal"
+        logger.info("Generating %s image(s) with %s image pipeline: %s", num_images, provider, prompt[:80])
         
         # Validate prompt
         if not prompt or not isinstance(prompt, str) or len(prompt.strip()) == 0:
             raise ValueError("Prompt is required and must be a non-empty string")
         
+        if _get_google_api_key():
+            gemini_result = _generate_with_gemini(prompt.strip(), aspect_ratio_lower)
+            generation_time = (datetime.datetime.now() - start_time).total_seconds()
+
+            response_data = {
+                "success": True,
+                "image": gemini_result["image_path"],
+                "provider": gemini_result["provider"],
+                "model": gemini_result["model"],
+                "media_tag": f"MEDIA:{gemini_result['image_path']}",
+            }
+
+            debug_call_data["success"] = True
+            debug_call_data["images_generated"] = 1
+            debug_call_data["generation_time"] = generation_time
+            _debug.log_call("image_generate_tool", debug_call_data)
+            _debug.save()
+            return json.dumps(response_data, indent=2, ensure_ascii=False)
+
         # Check API key availability
         if not (os.getenv("FAL_KEY") or _resolve_managed_fal_gateway()):
-            message = "FAL_KEY environment variable not set"
+            message = "Neither GOOGLE_API_KEY/GEMINI_API_KEY nor FAL_KEY is configured"
             if managed_nous_tools_enabled():
-                message += " and managed FAL gateway is unavailable"
+                message += ", and managed FAL gateway is unavailable"
             raise ValueError(message)
         
         # Validate other parameters
@@ -541,7 +655,7 @@ def check_fal_api_key() -> bool:
     Returns:
         bool: True if API key is set, False otherwise
     """
-    return bool(os.getenv("FAL_KEY") or _resolve_managed_fal_gateway())
+    return bool(_get_google_api_key() or os.getenv("FAL_KEY") or _resolve_managed_fal_gateway())
 
 
 def check_image_generation_requirements() -> bool:
@@ -556,6 +670,10 @@ def check_image_generation_requirements() -> bool:
         if not check_fal_api_key():
             return False
         
+        if _get_google_api_key():
+            import requests  # noqa: F401 — SDK presence check
+            return True
+
         # Check if fal_client is available
         import fal_client  # noqa: F401 — SDK presence check
         return True
@@ -647,7 +765,7 @@ from tools.registry import registry, tool_error
 
 IMAGE_GENERATE_SCHEMA = {
     "name": "image_generate",
-    "description": "Generate high-quality images from text prompts using FLUX 2 Pro model with automatic 2x upscaling. Creates detailed, artistic images that are automatically upscaled for hi-rez results. Returns a single upscaled image URL. Display it using markdown: ![description](URL)",
+    "description": "Generate a high-quality image from a text prompt. When Google AI Studio is configured, Hermes prefers Gemini Nano Banana 2 and saves the image locally for native delivery. Otherwise it falls back to FLUX.",
     "parameters": {
         "type": "object",
         "properties": {

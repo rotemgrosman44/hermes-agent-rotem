@@ -1732,6 +1732,7 @@ class BasePlatformAdapter(ABC):
                 # Auto-TTS: if voice message, generate audio FIRST (before sending text)
                 # Skipped when the chat has voice mode disabled (/voice off)
                 _tts_path = None
+                suppress_text_for_audio = False
                 if (event.message_type == MessageType.VOICE
                         and text_content
                         and not media_files
@@ -1759,13 +1760,29 @@ class BasePlatformAdapter(ABC):
                             audio_path=_tts_path,
                             metadata=_thread_metadata,
                         )
+                        # For chat platforms, a spoken reply should feel native.
+                        # When we already sent TTS audio, suppress the redundant
+                        # text body unless another media payload still needs a caption.
+                        suppress_text_for_audio = True
                     finally:
                         try:
                             os.remove(_tts_path)
                         except OSError:
                             pass
 
+                _AUDIO_EXTS = {'.ogg', '.opus', '.mp3', '.wav', '.m4a'}
+                _VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp'}
+                _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+
+                if media_files:
+                    audio_only_media = all(Path(media_path).suffix.lower() in _AUDIO_EXTS for media_path, _ in media_files)
+                    if audio_only_media:
+                        suppress_text_for_audio = True
+
                 # Send the text portion
+                if suppress_text_for_audio:
+                    text_content = ""
+
                 if text_content:
                     logger.info("[%s] Sending response (%d chars) to %s", self.name, len(text_content), event.source.chat_id)
                     result = await self._send_with_retry(
@@ -1813,10 +1830,6 @@ class BasePlatformAdapter(ABC):
                         logger.error("[%s] Error sending image: %s", self.name, img_err, exc_info=True)
 
                 # Send extracted media files — route by file type
-                _AUDIO_EXTS = {'.ogg', '.opus', '.mp3', '.wav', '.m4a'}
-                _VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp'}
-                _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
-
                 for media_path, is_voice in media_files:
                     if human_delay > 0:
                         await asyncio.sleep(human_delay)

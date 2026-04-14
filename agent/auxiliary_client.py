@@ -322,6 +322,8 @@ class _CodexCompletionsAdapter:
         text_parts: List[str] = []
         tool_calls_raw: List[Any] = []
         usage = None
+        streamed_text_parts: List[str] = []
+        streamed_tool_calls: List[Any] = []
 
         try:
             # Collect output items and text deltas during streaming —
@@ -332,16 +334,27 @@ class _CodexCompletionsAdapter:
             has_function_calls = False
             with self._client.responses.stream(**resp_kwargs) as stream:
                 for _event in stream:
-                    _etype = getattr(_event, "type", "")
-                    if _etype == "response.output_item.done":
-                        _done = getattr(_event, "item", None)
-                        if _done is not None:
-                            collected_output_items.append(_done)
-                    elif "output_text.delta" in _etype:
-                        _delta = getattr(_event, "delta", "")
-                        if _delta:
-                            collected_text_deltas.append(_delta)
-                    elif "function_call" in _etype:
+                    event_type = getattr(_event, "type", "")
+                    if event_type == "response.output_item.done":
+                        item = getattr(_event, "item", None)
+                        if item is not None:
+                            collected_output_items.append(item)
+                            item_type = getattr(item, "type", None)
+                            if item_type == "function_call":
+                                streamed_tool_calls.append(SimpleNamespace(
+                                    id=getattr(item, "call_id", ""),
+                                    type="function",
+                                    function=SimpleNamespace(
+                                        name=getattr(item, "name", ""),
+                                        arguments=getattr(item, "arguments", "{}"),
+                                    ),
+                                ))
+                    elif "output_text.delta" in event_type:
+                        delta = getattr(_event, "delta", "")
+                        if isinstance(delta, str) and delta:
+                            streamed_text_parts.append(delta)
+                            collected_text_deltas.append(delta)
+                    elif "function_call" in event_type:
                         has_function_calls = True
                 final = stream.get_final_response()
 
@@ -404,6 +417,11 @@ class _CodexCompletionsAdapter:
         except Exception as exc:
             logger.debug("Codex auxiliary Responses API call failed: %s", exc)
             raise
+
+        if not text_parts and streamed_text_parts:
+            text_parts = list(streamed_text_parts)
+        if not tool_calls_raw and streamed_tool_calls:
+            tool_calls_raw = list(streamed_tool_calls)
 
         content = "".join(text_parts).strip() or None
 

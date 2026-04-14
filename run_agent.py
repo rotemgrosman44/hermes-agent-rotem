@@ -4291,6 +4291,45 @@ class AIAgent:
             finish_reason = "stop"
         return assistant_message, finish_reason
 
+    def _hydrate_codex_stream_response(
+        self,
+        response: Any,
+        streamed_output_items: List[Any],
+        streamed_text_parts: List[str],
+    ) -> Any:
+        """Backfill empty final responses with items observed during stream events."""
+        output_items = getattr(response, "output", None)
+        if isinstance(output_items, list) and output_items:
+            return response
+
+        text = "".join(part for part in streamed_text_parts if part).strip()
+        hydrated_items = list(streamed_output_items)
+        if not hydrated_items and text:
+            hydrated_items = [
+                SimpleNamespace(
+                    type="message",
+                    status="completed",
+                    content=[SimpleNamespace(type="output_text", text=text)],
+                )
+            ]
+        if not hydrated_items:
+            return response
+
+        try:
+            response.output = hydrated_items
+            if hasattr(response, "output_text"):
+                response.output_text = text
+            return response
+        except Exception:
+            return SimpleNamespace(
+                output=hydrated_items,
+                output_text=text,
+                usage=getattr(response, "usage", None),
+                status=getattr(response, "status", "completed"),
+                model=getattr(response, "model", None),
+                error=getattr(response, "error", None),
+            )
+
     def _thread_identity(self) -> str:
         thread = threading.current_thread()
         return f"{thread.name}:{thread.ident}"
@@ -4586,7 +4625,8 @@ class AIAgent:
         # response.incomplete instead of response.completed).
         self._codex_streamed_text_parts: list = []
         for attempt in range(max_stream_retries + 1):
-            collected_output_items: list = []
+            streamed_text_parts: List[str] = []
+            streamed_output_items: List[Any] = []
             try:
                 with active_client.responses.stream(**api_kwargs) as stream:
                     for event in stream:
@@ -4594,12 +4634,12 @@ class AIAgent:
                         if self._interrupt_requested:
                             break
                         event_type = getattr(event, "type", "")
-                        # Fire callbacks on text content deltas (suppress during tool calls)
                         if "output_text.delta" in event_type or event_type == "response.output_text.delta":
                             delta_text = getattr(event, "delta", "")
                             if delta_text:
                                 self._codex_streamed_text_parts.append(delta_text)
                             if delta_text and not has_tool_calls:
+                                streamed_text_parts.append(delta_text)
                                 if not first_delta_fired:
                                     first_delta_fired = True
                                     if on_first_delta:
@@ -4608,23 +4648,16 @@ class AIAgent:
                                         except Exception:
                                             pass
                                 self._fire_stream_delta(delta_text)
-                        # Track tool calls to suppress text streaming
                         elif "function_call" in event_type:
                             has_tool_calls = True
-                        # Fire reasoning callbacks
+                        elif event_type == "response.output_item.done":
+                            item = getattr(event, "item", None)
+                            if item is not None:
+                                streamed_output_items.append(item)
                         elif "reasoning" in event_type and "delta" in event_type:
                             reasoning_text = getattr(event, "delta", "")
                             if reasoning_text:
                                 self._fire_reasoning_delta(reasoning_text)
-                        # Collect completed output items — some backends
-                        # (chatgpt.com/backend-api/codex) stream valid items
-                        # via response.output_item.done but the SDK's
-                        # get_final_response() returns an empty output list.
-                        elif event_type == "response.output_item.done":
-                            done_item = getattr(event, "item", None)
-                            if done_item is not None:
-                                collected_output_items.append(done_item)
-                        # Log non-completed terminal events for diagnostics
                         elif event_type in ("response.incomplete", "response.failed"):
                             resp_obj = getattr(event, "response", None)
                             status = getattr(resp_obj, "status", None) if resp_obj else None
@@ -4632,35 +4665,18 @@ class AIAgent:
                             logger.warning(
                                 "Codex Responses stream received terminal event %s "
                                 "(status=%s, incomplete_details=%s, streamed_chars=%d). %s",
-                                event_type, status, incomplete_details,
+                                event_type,
+                                status,
+                                incomplete_details,
                                 sum(len(p) for p in self._codex_streamed_text_parts),
                                 self._client_log_context(),
                             )
                     final_response = stream.get_final_response()
-                    # PATCH: ChatGPT Codex backend streams valid output items
-                    # but get_final_response() can return an empty output list.
-                    # Backfill from collected items or synthesize from deltas.
-                    _out = getattr(final_response, "output", None)
-                    if isinstance(_out, list) and not _out:
-                        if collected_output_items:
-                            final_response.output = list(collected_output_items)
-                            logger.debug(
-                                "Codex stream: backfilled %d output items from stream events",
-                                len(collected_output_items),
-                            )
-                        elif self._codex_streamed_text_parts and not has_tool_calls:
-                            assembled = "".join(self._codex_streamed_text_parts)
-                            final_response.output = [SimpleNamespace(
-                                type="message",
-                                role="assistant",
-                                status="completed",
-                                content=[SimpleNamespace(type="output_text", text=assembled)],
-                            )]
-                            logger.debug(
-                                "Codex stream: synthesized output from %d text deltas (%d chars)",
-                                len(self._codex_streamed_text_parts), len(assembled),
-                            )
-                    return final_response
+                    return self._hydrate_codex_stream_response(
+                        final_response,
+                        streamed_output_items,
+                        streamed_text_parts,
+                    )
             except (_httpx.RemoteProtocolError, _httpx.ReadTimeout, _httpx.ConnectError, ConnectionError) as exc:
                 if attempt < max_stream_retries:
                     logger.debug(
@@ -4711,29 +4727,28 @@ class AIAgent:
             return stream_or_response
 
         terminal_response = None
-        collected_output_items: list = []
-        collected_text_deltas: list = []
+        streamed_text_parts: List[str] = []
+        streamed_output_items: List[Any] = []
         try:
             for event in stream_or_response:
                 self._touch_activity("receiving stream response")
                 event_type = getattr(event, "type", None)
                 if not event_type and isinstance(event, dict):
                     event_type = event.get("type")
-
-                # Collect output items and text deltas for backfill
+                if event_type == "response.output_text.delta":
+                    delta = getattr(event, "delta", None)
+                    if delta is None and isinstance(event, dict):
+                        delta = event.get("delta")
+                    if isinstance(delta, str) and delta:
+                        streamed_text_parts.append(delta)
+                    continue
                 if event_type == "response.output_item.done":
-                    done_item = getattr(event, "item", None)
-                    if done_item is None and isinstance(event, dict):
-                        done_item = event.get("item")
-                    if done_item is not None:
-                        collected_output_items.append(done_item)
-                elif event_type in ("response.output_text.delta",):
-                    delta = getattr(event, "delta", "")
-                    if not delta and isinstance(event, dict):
-                        delta = event.get("delta", "")
-                    if delta:
-                        collected_text_deltas.append(delta)
-
+                    item = getattr(event, "item", None)
+                    if item is None and isinstance(event, dict):
+                        item = event.get("item")
+                    if item is not None:
+                        streamed_output_items.append(item)
+                    continue
                 if event_type not in {"response.completed", "response.incomplete", "response.failed"}:
                     continue
 
@@ -4741,27 +4756,11 @@ class AIAgent:
                 if terminal_response is None and isinstance(event, dict):
                     terminal_response = event.get("response")
                 if terminal_response is not None:
-                    # Backfill empty output from collected stream events
-                    _out = getattr(terminal_response, "output", None)
-                    if isinstance(_out, list) and not _out:
-                        if collected_output_items:
-                            terminal_response.output = list(collected_output_items)
-                            logger.debug(
-                                "Codex fallback stream: backfilled %d output items",
-                                len(collected_output_items),
-                            )
-                        elif collected_text_deltas:
-                            assembled = "".join(collected_text_deltas)
-                            terminal_response.output = [SimpleNamespace(
-                                type="message", role="assistant",
-                                status="completed",
-                                content=[SimpleNamespace(type="output_text", text=assembled)],
-                            )]
-                            logger.debug(
-                                "Codex fallback stream: synthesized from %d deltas (%d chars)",
-                                len(collected_text_deltas), len(assembled),
-                            )
-                    return terminal_response
+                    return self._hydrate_codex_stream_response(
+                        terminal_response,
+                        streamed_output_items,
+                        streamed_text_parts,
+                    )
         finally:
             close_fn = getattr(stream_or_response, "close", None)
             if callable(close_fn):
@@ -4771,7 +4770,11 @@ class AIAgent:
                     pass
 
         if terminal_response is not None:
-            return terminal_response
+            return self._hydrate_codex_stream_response(
+                terminal_response,
+                streamed_output_items,
+                streamed_text_parts,
+            )
         raise RuntimeError("Responses create(stream=True) fallback did not emit a terminal response.")
 
     def _try_refresh_codex_client_credentials(self, *, force: bool = True) -> bool:
