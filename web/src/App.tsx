@@ -15,7 +15,7 @@ import AnalyticsPage from "@/pages/AnalyticsPage";
 import CronPage from "@/pages/CronPage";
 import SkillsPage from "@/pages/SkillsPage";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
-import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { ToneSwitcher } from "@/components/ToneSwitcher";
 import { useI18n } from "@/i18n";
 import { usePlugins } from "@/plugins";
 import type { RegisteredPlugin } from "@/plugins";
@@ -146,7 +146,7 @@ export default function App() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2 px-2 sm:px-4">
-            <ThemeSwitcher />
+            <ToneSwitcher />
             <LanguageSwitcher />
             <span className="hidden sm:inline font-display text-[0.7rem] tracking-[0.15em] uppercase opacity-50">
               {t.app.webUi}
@@ -155,7 +155,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="relative z-2 mx-auto w-full max-w-[1400px] flex-1 px-3 sm:px-6 pt-16 sm:pt-20 pb-4 sm:pb-8">
+      <main className="workspace-daylight relative z-2 mx-auto w-full max-w-[1400px] flex-1 px-3 sm:px-6 pt-16 sm:pt-20 pb-4 sm:pb-8">
         <Routes>
           <Route path="/" element={<StatusPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
