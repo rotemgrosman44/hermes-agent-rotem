@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Package,
   Search,
@@ -16,7 +16,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { SkillInfo, ToolsetInfo } from "@/lib/api";
+import type { SkillInfo, SkillsStateResponse, ToolsetInfo } from "@/lib/api";
 import { useToast } from "@/hooks/useToast";
 import { Toast } from "@/components/Toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -80,7 +80,7 @@ function toolsetIcon(name: string): React.ComponentType<{ className?: string }> 
 /* ------------------------------------------------------------------ */
 
 export default function SkillsPage() {
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skillsState, setSkillsState] = useState<SkillsStateResponse | null>(null);
   const [toolsets, setToolsets] = useState<ToolsetInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -90,25 +90,49 @@ export default function SkillsPage() {
   const { toast, showToast } = useToast();
   const { t } = useI18n();
 
-  useEffect(() => {
-    Promise.all([api.getSkills(), api.getToolsets()])
-      .then(([s, tsets]) => {
-        setSkills(s);
+  const loadPageState = useCallback(() => {
+    setLoading(true);
+    Promise.all([api.getSkillsState(), api.getToolsets()])
+      .then(([skillsResp, tsets]) => {
+        setSkillsState(skillsResp);
         setToolsets(tsets);
       })
       .catch(() => showToast(t.common.loading, "error"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [showToast, t]);
+
+  useEffect(() => {
+    const handleFocus = () => loadPageState();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") loadPageState();
+    };
+
+    loadPageState();
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [loadPageState]);
+
+  const skills = skillsState?.skills ?? [];
 
   /* ---- Toggle skill ---- */
   const handleToggleSkill = async (skill: SkillInfo) => {
     setTogglingSkills((prev) => new Set(prev).add(skill.name));
     try {
       await api.toggleSkill(skill.name, !skill.enabled);
-      setSkills((prev) =>
-        prev.map((s) =>
-          s.name === skill.name ? { ...s, enabled: !s.enabled } : s
-        )
+      setSkillsState((prev) =>
+        prev
+          ? {
+              ...prev,
+              skills: prev.skills.map((s) =>
+                s.name === skill.name ? { ...s, enabled: !s.enabled } : s
+              ),
+            }
+          : prev
       );
       showToast(
         `${skill.name} ${skill.enabled ? t.common.disabled : t.common.enabled}`,
@@ -191,12 +215,28 @@ export default function SkillsPage() {
 
       {/* ═══════════════ Header ═══════════════ */}
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Package className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-base font-semibold">{t.skills.title}</h1>
-          <span className="text-xs text-muted-foreground">
-            {t.skills.enabledOf.replace("{enabled}", String(enabledCount)).replace("{total}", String(skills.length))}
-          </span>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-3">
+            <Package className="h-5 w-5 text-muted-foreground" />
+            <h1 className="text-base font-semibold">{t.skills.title}</h1>
+            <span className="text-xs text-muted-foreground">
+              {t.skills.enabledOf.replace("{enabled}", String(enabledCount)).replace("{total}", String(skills.length))}
+            </span>
+          </div>
+          {skillsState && (
+            <div className="flex flex-wrap items-center gap-2 text-[0.7rem] text-muted-foreground/80">
+              <Badge variant="secondary">
+                {skillsState.scope === "current_runtime" ? "Current runtime" : skillsState.scope}
+              </Badge>
+              <code>{skillsState.runtime_home}</code>
+              <code>{skillsState.skills_dir}</code>
+              {skillsState.external_dirs.length === 0 ? (
+                <Badge variant="outline">No external skill dirs</Badge>
+              ) : (
+                <Badge variant="outline">{skillsState.external_dirs.length} external dirs</Badge>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

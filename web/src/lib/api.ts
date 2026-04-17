@@ -72,6 +72,7 @@ export const api = {
       body: JSON.stringify({ yaml_text }),
     }),
   getEnvVars: () => fetchJSON<Record<string, EnvVarInfo>>("/api/env"),
+  getEnvState: () => fetchJSON<EnvStateResponse>("/api/env/state"),
   setEnvVar: (key: string, value: string) =>
     fetchJSON<{ ok: boolean }>("/api/env", {
       method: "PUT",
@@ -115,6 +116,7 @@ export const api = {
 
   // Skills & Toolsets
   getSkills: () => fetchJSON<SkillInfo[]>("/api/skills"),
+  getSkillsState: () => fetchJSON<SkillsStateResponse>("/api/skills/state"),
   toggleSkill: (name: string, enabled: boolean) =>
     fetchJSON<{ ok: boolean }>("/api/skills/toggle", {
       method: "PUT",
@@ -212,6 +214,8 @@ export interface StatusResponse {
   config_path: string;
   config_version: number;
   env_path: string;
+  fallback_model?: string;
+  fallback_provider?: string;
   gateway_exit_reason: string | null;
   gateway_pid: number | null;
   gateway_platforms: Record<string, PlatformStatus>;
@@ -221,7 +225,13 @@ export interface StatusResponse {
   hermes_home: string;
   latest_config_version: number;
   release_date: string;
+  ui_scopes?: Record<string, string>;
   version: string;
+}
+
+export interface RuntimeRef {
+  label: string;
+  home: string;
 }
 
 export interface SessionInfo {
@@ -238,6 +248,9 @@ export interface SessionInfo {
   input_tokens: number;
   output_tokens: number;
   preview: string | null;
+  raw_session_id?: string;
+  runtime_home?: string;
+  runtime_label?: string;
 }
 
 export interface PaginatedSessions {
@@ -245,6 +258,10 @@ export interface PaginatedSessions {
   total: number;
   limit: number;
   offset: number;
+  scope?: string;
+  runtime_home?: string;
+  runtime_count?: number;
+  runtimes?: RuntimeRef[];
 }
 
 export interface EnvVarInfo {
@@ -256,6 +273,13 @@ export interface EnvVarInfo {
   is_password: boolean;
   tools: string[];
   advanced: boolean;
+}
+
+export interface EnvStateResponse {
+  scope: string;
+  runtime_home: string;
+  env_path: string;
+  vars: Record<string, EnvVarInfo>;
 }
 
 export interface SessionMessage {
@@ -332,6 +356,15 @@ export interface SkillInfo {
   description: string;
   category: string;
   enabled: boolean;
+}
+
+export interface SkillsStateResponse {
+  scope: string;
+  runtime_home: string;
+  skills_dir: string;
+  external_dirs: string[];
+  bundled_manifest: string | null;
+  skills: SkillInfo[];
 }
 
 export interface ToolsetInfo {

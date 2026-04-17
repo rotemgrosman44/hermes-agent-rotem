@@ -10,6 +10,7 @@ Usage:
 """
 
 import asyncio
+import base64
 import hmac
 import importlib.util
 import json
@@ -127,6 +128,190 @@ async def auth_middleware(request: Request, call_next):
                 content={"detail": "Unauthorized"},
             )
     return await call_next(request)
+
+
+def _load_runtime_status_for(home: Path) -> Dict[str, Any]:
+    """Read ``gateway_state.json`` for an arbitrary Hermes runtime home."""
+    try:
+        path = home / "gateway_state.json"
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _iter_session_runtime_homes() -> List[Path]:
+    """Return the current runtime plus any other live sibling runtimes.
+
+    The web dashboard process itself is still scoped to one ``HERMES_HOME``
+    for config/env editing, but the sessions page should reflect the user's
+    live messaging surface.  We therefore aggregate:
+    - the current dashboard runtime
+    - live profile runtimes under ``~/.hermes/profiles/*``
+    - live sibling runtimes such as ``~/.hermes-twitter-operator``
+
+    Non-current runtimes are included only when their persisted gateway state
+    says ``running`` to avoid surfacing stale historical homes like the old
+    default runtime after a cutover.
+    """
+    current = get_hermes_home().resolve()
+    home_root = Path.home()
+    default_home = (home_root / ".hermes").resolve()
+
+    candidates: List[Path] = [current]
+    if default_home.exists():
+        candidates.append(default_home)
+        profiles_dir = default_home / "profiles"
+        if profiles_dir.exists():
+            candidates.extend(
+                path.resolve()
+                for path in profiles_dir.iterdir()
+                if path.is_dir()
+            )
+    candidates.extend(
+        path.resolve()
+        for path in home_root.glob(".hermes-*")
+        if path.is_dir()
+    )
+
+    homes: List[Path] = []
+    seen: set[str] = set()
+    for home in candidates:
+        home_key = str(home)
+        if home_key in seen:
+            continue
+        seen.add(home_key)
+        if not (home / "state.db").exists():
+            continue
+        if home == current:
+            homes.append(home)
+            continue
+        status = _load_runtime_status_for(home)
+        if status.get("gateway_state") == "running":
+            homes.append(home)
+    return homes
+
+
+def _runtime_label_for(home: Path) -> str:
+    current = get_hermes_home().resolve()
+    if home == current:
+        return "main"
+    if home.parent.name == "profiles":
+        return home.name
+    name = home.name.lstrip(".")
+    return name or "runtime"
+
+
+def _runtime_ref(home: Path) -> Dict[str, str]:
+    return {
+        "label": _runtime_label_for(home),
+        "home": str(home.resolve()),
+    }
+
+
+def _dashboard_scope_meta(scope: str) -> Dict[str, Any]:
+    return {
+        "scope": scope,
+        "runtime_home": str(get_hermes_home().resolve()),
+    }
+
+
+def _encode_runtime_home(home: Path) -> str:
+    raw = str(home.resolve()).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_runtime_home(encoded: str) -> Optional[Path]:
+    try:
+        padding = "=" * (-len(encoded) % 4)
+        raw = base64.urlsafe_b64decode(encoded + padding).decode("utf-8")
+        return Path(raw).resolve()
+    except Exception:
+        return None
+
+
+def _pack_session_ref(home: Path, session_id: str) -> str:
+    return f"{_encode_runtime_home(home)}:{session_id}"
+
+
+def _unpack_session_ref(session_ref: str) -> tuple[Path, str]:
+    if ":" not in session_ref:
+        return get_hermes_home().resolve(), session_ref
+    encoded_home, raw_session_id = session_ref.split(":", 1)
+    home = _decode_runtime_home(encoded_home)
+    if home is None or not (home / "state.db").exists():
+        return get_hermes_home().resolve(), session_ref
+    return home, raw_session_id
+
+
+def _open_runtime_session_db(home: Path):
+    from hermes_state import SessionDB
+
+    return SessionDB(db_path=home / "state.db")
+
+
+def _enrich_runtime_session(home: Path, session: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = dict(session)
+    raw_id = enriched["id"]
+    enriched["runtime_home"] = str(home)
+    enriched["runtime_label"] = _runtime_label_for(home)
+    enriched["raw_session_id"] = raw_id
+    enriched["id"] = _pack_session_ref(home, raw_id)
+    return enriched
+
+
+def _list_sessions_across_runtimes() -> List[Dict[str, Any]]:
+    sessions: List[Dict[str, Any]] = []
+    for home in _iter_session_runtime_homes():
+        db = _open_runtime_session_db(home)
+        try:
+            count = db.session_count()
+            if count <= 0:
+                continue
+            for session in db.list_sessions_rich(limit=count, offset=0):
+                sessions.append(_enrich_runtime_session(home, session))
+        finally:
+            db.close()
+    sessions.sort(key=lambda s: s.get("started_at", 0), reverse=True)
+    return sessions
+
+
+def _search_sessions_across_runtimes(query: str, limit: int) -> List[Dict[str, Any]]:
+    import re
+
+    terms = []
+    for token in re.findall(r'"[^"]*"|\S+', query.strip()):
+        if token.startswith('"') or token.endswith("*"):
+            terms.append(token)
+        else:
+            terms.append(token + "*")
+    prefix_query = " ".join(terms)
+
+    matches: List[Dict[str, Any]] = []
+    seen: Dict[str, Dict[str, Any]] = {}
+    for home in _iter_session_runtime_homes():
+        db = _open_runtime_session_db(home)
+        try:
+            for match in db.search_messages(query=prefix_query, limit=limit):
+                session_ref = _pack_session_ref(home, match["session_id"])
+                if session_ref in seen:
+                    continue
+                seen[session_ref] = {
+                    "session_id": session_ref,
+                    "snippet": match.get("snippet", ""),
+                    "role": match.get("role"),
+                    "source": match.get("source"),
+                    "model": match.get("model"),
+                    "session_started": match.get("session_started"),
+                    "runtime_label": _runtime_label_for(home),
+                    "runtime_home": str(home),
+                }
+        finally:
+            db.close()
+    matches = list(seen.values())
+    matches.sort(key=lambda m: m.get("session_started") or 0, reverse=True)
+    return matches[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +558,13 @@ def _probe_gateway_health() -> tuple[bool, dict | None]:
 @app.get("/api/status")
 async def get_status():
     current_ver, latest_ver = check_config_version()
+    config = load_config()
+    fallback_cfg = config.get("fallback_model")
+    fallback_model = ""
+    fallback_provider = ""
+    if isinstance(fallback_cfg, dict):
+        fallback_model = str(fallback_cfg.get("model") or "")
+        fallback_provider = str(fallback_cfg.get("provider") or "")
 
     # --- Gateway liveness detection ---
     # Try local PID check first (same-host).  If that fails and a remote
@@ -417,7 +609,7 @@ async def get_status():
     if runtime:
         gateway_state = runtime.get("gateway_state")
         gateway_platforms = runtime.get("platforms") or {}
-        if configured_gateway_platforms is not None:
+        if configured_gateway_platforms:
             gateway_platforms = {
                 key: value
                 for key, value in gateway_platforms.items()
@@ -442,18 +634,12 @@ async def get_status():
 
     active_sessions = 0
     try:
-        from hermes_state import SessionDB
-        db = SessionDB()
-        try:
-            sessions = db.list_sessions_rich(limit=50)
-            now = time.time()
-            active_sessions = sum(
-                1 for s in sessions
-                if s.get("ended_at") is None
-                and (now - s.get("last_active", s.get("started_at", 0))) < 300
-            )
-        finally:
-            db.close()
+        now = time.time()
+        active_sessions = sum(
+            1 for s in _list_sessions_across_runtimes()
+            if s.get("ended_at") is None
+            and (now - s.get("last_active", s.get("started_at", 0))) < 300
+        )
     except Exception:
         pass
 
@@ -465,6 +651,8 @@ async def get_status():
         "env_path": str(get_env_path()),
         "config_version": current_ver,
         "latest_config_version": latest_ver,
+        "fallback_model": fallback_model,
+        "fallback_provider": fallback_provider,
         "gateway_running": gateway_running,
         "gateway_pid": gateway_pid,
         "gateway_state": gateway_state,
@@ -472,26 +660,51 @@ async def get_status():
         "gateway_exit_reason": gateway_exit_reason,
         "gateway_updated_at": gateway_updated_at,
         "active_sessions": active_sessions,
+        "ui_scopes": {
+            "status": "mixed",
+            "sessions": "aggregated",
+            "env": "current_runtime",
+            "skills": "current_runtime",
+            "config": "current_runtime",
+            "cron": "current_runtime",
+            "logs": "current_runtime",
+        },
     }
 
 
 @app.get("/api/sessions")
 async def get_sessions(limit: int = 20, offset: int = 0):
     try:
-        from hermes_state import SessionDB
-        db = SessionDB()
-        try:
-            sessions = db.list_sessions_rich(limit=limit, offset=offset)
-            total = db.session_count()
-            now = time.time()
-            for s in sessions:
-                s["is_active"] = (
-                    s.get("ended_at") is None
-                    and (now - s.get("last_active", s.get("started_at", 0))) < 300
-                )
-            return {"sessions": sessions, "total": total, "limit": limit, "offset": offset}
-        finally:
-            db.close()
+        runtime_homes = _iter_session_runtime_homes()
+        all_sessions = []
+        for home in runtime_homes:
+            db = _open_runtime_session_db(home)
+            try:
+                count = db.session_count()
+                if count <= 0:
+                    continue
+                for session in db.list_sessions_rich(limit=count, offset=0):
+                    all_sessions.append(_enrich_runtime_session(home, session))
+            finally:
+                db.close()
+        all_sessions.sort(key=lambda s: s.get("started_at", 0), reverse=True)
+        now = time.time()
+        total = len(all_sessions)
+        sessions = all_sessions[offset: offset + limit]
+        for s in sessions:
+            s["is_active"] = (
+                s.get("ended_at") is None
+                and (now - s.get("last_active", s.get("started_at", 0))) < 300
+            )
+        return {
+            "sessions": sessions,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            **_dashboard_scope_meta("aggregated"),
+            "runtime_count": len(runtime_homes),
+            "runtimes": [_runtime_ref(home) for home in runtime_homes],
+        }
     except Exception as e:
         _log.exception("GET /api/sessions failed")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -503,37 +716,7 @@ async def search_sessions(q: str = "", limit: int = 20):
     if not q or not q.strip():
         return {"results": []}
     try:
-        from hermes_state import SessionDB
-        db = SessionDB()
-        try:
-            # Auto-add prefix wildcards so partial words match
-            # e.g. "nimb" → "nimb*" matches "nimby"
-            # Preserve quoted phrases and existing wildcards as-is
-            import re
-            terms = []
-            for token in re.findall(r'"[^"]*"|\S+', q.strip()):
-                if token.startswith('"') or token.endswith("*"):
-                    terms.append(token)
-                else:
-                    terms.append(token + "*")
-            prefix_query = " ".join(terms)
-            matches = db.search_messages(query=prefix_query, limit=limit)
-            # Group by session_id — return unique sessions with their best snippet
-            seen: dict = {}
-            for m in matches:
-                sid = m["session_id"]
-                if sid not in seen:
-                    seen[sid] = {
-                        "session_id": sid,
-                        "snippet": m.get("snippet", ""),
-                        "role": m.get("role"),
-                        "source": m.get("source"),
-                        "model": m.get("model"),
-                        "session_started": m.get("session_started"),
-                    }
-            return {"results": list(seen.values())}
-        finally:
-            db.close()
+        return {"results": _search_sessions_across_runtimes(q, limit)}
     except Exception:
         _log.exception("GET /api/sessions/search failed")
         raise HTTPException(status_code=500, detail="Search failed")
@@ -729,8 +912,7 @@ async def update_config(body: ConfigUpdate):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.get("/api/env")
-async def get_env_vars():
+def _collect_env_vars() -> Dict[str, Any]:
     env_on_disk = load_env()
     result = {}
     for var_name, info in OPTIONAL_ENV_VARS.items():
@@ -746,6 +928,20 @@ async def get_env_vars():
             "advanced": info.get("advanced", False),
         }
     return result
+
+
+@app.get("/api/env")
+async def get_env_vars():
+    return _collect_env_vars()
+
+
+@app.get("/api/env/state")
+async def get_env_state():
+    return {
+        **_dashboard_scope_meta("current_runtime"),
+        "env_path": str(get_env_path()),
+        "vars": _collect_env_vars(),
+    }
 
 
 @app.put("/api/env")
@@ -1700,38 +1896,39 @@ async def cancel_oauth_session(session_id: str, request: Request):
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str):
-    from hermes_state import SessionDB
-    db = SessionDB()
+    home, raw_session_id = _unpack_session_ref(session_id)
+    db = _open_runtime_session_db(home)
     try:
-        sid = db.resolve_session_id(session_id)
+        sid = db.resolve_session_id(raw_session_id)
         session = db.get_session(sid) if sid else None
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        return session
+        return _enrich_runtime_session(home, session)
     finally:
         db.close()
 
 
 @app.get("/api/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str):
-    from hermes_state import SessionDB
-    db = SessionDB()
+    home, raw_session_id = _unpack_session_ref(session_id)
+    db = _open_runtime_session_db(home)
     try:
-        sid = db.resolve_session_id(session_id)
+        sid = db.resolve_session_id(raw_session_id)
         if not sid:
             raise HTTPException(status_code=404, detail="Session not found")
         messages = db.get_messages(sid)
-        return {"session_id": sid, "messages": messages}
+        return {"session_id": _pack_session_ref(home, sid), "messages": messages}
     finally:
         db.close()
 
 
 @app.delete("/api/sessions/{session_id}")
 async def delete_session_endpoint(session_id: str):
-    from hermes_state import SessionDB
-    db = SessionDB()
+    home, raw_session_id = _unpack_session_ref(session_id)
+    db = _open_runtime_session_db(home)
     try:
-        if not db.delete_session(session_id):
+        sid = db.resolve_session_id(raw_session_id) or raw_session_id
+        if not db.delete_session(sid):
             raise HTTPException(status_code=404, detail="Session not found")
         return {"ok": True}
     finally:
@@ -1895,14 +2092,33 @@ class SkillToggle(BaseModel):
 
 @app.get("/api/skills")
 async def get_skills():
+    return _collect_skills()["skills"]
+
+
+def _collect_skills() -> Dict[str, Any]:
     from tools.skills_tool import _find_all_skills
+    from tools.skills_tool import SKILLS_DIR
     from hermes_cli.skills_config import get_disabled_skills
+    from agent.skill_utils import get_external_skills_dirs
+
     config = load_config()
     disabled = get_disabled_skills(config)
     skills = _find_all_skills(skip_disabled=True)
     for s in skills:
         s["enabled"] = s["name"] not in disabled
-    return skills
+    bundled_manifest = SKILLS_DIR / ".bundled_manifest"
+    return {
+        "skills": skills,
+        **_dashboard_scope_meta("current_runtime"),
+        "skills_dir": str(SKILLS_DIR),
+        "external_dirs": [str(path) for path in get_external_skills_dirs()],
+        "bundled_manifest": str(bundled_manifest) if bundled_manifest.exists() else None,
+    }
+
+
+@app.get("/api/skills/state")
+async def get_skills_state():
+    return _collect_skills()
 
 
 @app.put("/api/skills/toggle")

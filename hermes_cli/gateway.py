@@ -386,13 +386,13 @@ def _profile_suffix() -> str:
     """
     import hashlib
     import re
-    from hermes_constants import get_default_hermes_root
     home = get_hermes_home().resolve()
-    default = get_default_hermes_root().resolve()
-    if home == default:
+    native_default = (Path.home() / ".hermes").resolve()
+    if home == native_default:
         return ""
-    # Detect <root>/profiles/<name> pattern → use the profile name
-    profiles_root = (default / "profiles").resolve()
+
+    # Detect standard ~/.hermes/profiles/<name> paths.
+    profiles_root = (native_default / "profiles").resolve()
     try:
         rel = home.relative_to(profiles_root)
         parts = rel.parts
@@ -400,6 +400,11 @@ def _profile_suffix() -> str:
             return parts[0]
     except ValueError:
         pass
+
+    # Detect custom-root profiles such as /opt/data/profiles/<name>.
+    if home.parent.name == "profiles" and re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", home.name):
+        return home.name
+
     # Fallback: short hash for arbitrary HERMES_HOME paths
     return hashlib.sha256(str(home).encode()).hexdigest()[:8]
 

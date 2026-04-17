@@ -17,7 +17,7 @@
 @font-face { font-family: "Mondwest"; src: url("/fonts/Mondwest-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 
 @theme {
-  /* ---- Hermes palette (default = brighter dusk) ---- */
+/* ---- Hermes palette (default = brighter dusk) ---- */
   --color-background: #123433;
   --color-foreground: #ffe9cf;
   --color-card: #173b39;
@@ -50,43 +50,43 @@
 
 :root,
 html[data-tone="dusk"] {
-  --color-background: #123433;
+  --color-background: #1e4c49;
   --color-foreground: #ffe9cf;
-  --color-card: #173b39;
+  --color-card: #285955;
   --color-card-foreground: #ffe9cf;
   --color-primary: #ffe9cf;
-  --color-primary-foreground: #102c2a;
-  --color-secondary: #1c4744;
+  --color-primary-foreground: #153230;
+  --color-secondary: #2a615d;
   --color-secondary-foreground: #ffe9cf;
-  --color-muted: #1f4d49;
-  --color-muted-foreground: #aac0b5;
-  --color-accent: #214f4c;
+  --color-muted: #316762;
+  --color-muted-foreground: #c7d8cf;
+  --color-accent: #346b66;
   --color-accent-foreground: #ffe9cf;
-  --color-border: color-mix(in srgb, #ffe9cf 18%, transparent);
-  --color-input: color-mix(in srgb, #ffe9cf 18%, transparent);
+  --color-border: color-mix(in srgb, #ffe9cf 22%, transparent);
+  --color-input: color-mix(in srgb, #ffe9cf 22%, transparent);
   --color-ring: #ffe9cf;
-  --color-popover: #173b39;
+  --color-popover: #285955;
   --color-popover-foreground: #ffe9cf;
 }
 
 html[data-tone="night"] {
-  --color-background: #041c1c;
-  --color-foreground: #ffe6cb;
-  --color-card: #062424;
-  --color-card-foreground: #ffe6cb;
-  --color-primary: #ffe6cb;
-  --color-primary-foreground: #041c1c;
-  --color-secondary: #0a2e2e;
-  --color-secondary-foreground: #ffe6cb;
-  --color-muted: #083030;
-  --color-muted-foreground: #8aaa9a;
-  --color-accent: #0c3838;
-  --color-accent-foreground: #ffe6cb;
-  --color-border: color-mix(in srgb, #ffe6cb 15%, transparent);
-  --color-input: color-mix(in srgb, #ffe6cb 15%, transparent);
-  --color-ring: #ffe6cb;
-  --color-popover: #062424;
-  --color-popover-foreground: #ffe6cb;
+  --color-background: #12302f;
+  --color-foreground: #ffead3;
+  --color-card: #183b39;
+  --color-card-foreground: #ffead3;
+  --color-primary: #ffead3;
+  --color-primary-foreground: #0f2a29;
+  --color-secondary: #1d4542;
+  --color-secondary-foreground: #ffead3;
+  --color-muted: #214c48;
+  --color-muted-foreground: #bdd0c7;
+  --color-accent: #275451;
+  --color-accent-foreground: #ffead3;
+  --color-border: color-mix(in srgb, #ffead3 20%, transparent);
+  --color-input: color-mix(in srgb, #ffead3 20%, transparent);
+  --color-ring: #ffead3;
+  --color-popover: #173a38;
+  --color-popover-foreground: #ffead3;
 }
 
 /* ---- Global body ---- */
@@ -98,6 +98,31 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+.workspace-daylight {
+  border-left: 1px solid color-mix(in srgb, var(--color-foreground) 12%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--color-foreground) 12%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-card) 88%, white 8%) 0%,
+      color-mix(in srgb, var(--color-background) 82%, white 6%) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--color-foreground) 8%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--color-foreground) 4%, transparent);
+}
+
+.workspace-daylight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at top, color-mix(in srgb, var(--color-foreground) 6%, transparent) 0%, transparent 58%),
+    linear-gradient(90deg, color-mix(in srgb, #ffbd38 7%, transparent) 0%, transparent 14%, transparent 86%, color-mix(in srgb, #ffbd38 6%, transparent) 100%);
+  opacity: 0.85;
 }
 
 /* ---- Selection ---- */
@@ -210,7 +235,7 @@ code {
   inset: 0;
   z-index: 101;
   mix-blend-mode: color-dodge;
-  opacity: 0.08;
+  opacity: 0.05;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' fill='%23eaeaea' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
   background-size: 512px 512px;
 }
@@ -222,7 +247,7 @@ code {
   inset: 0;
   z-index: 99;
   mix-blend-mode: lighten;
-  opacity: 0.26;
+  opacity: 0.42;
   background: radial-gradient(ellipse at 0% 0%, rgba(255,189,56,0.35) 0%, rgba(255,189,56,0) 60%);
 }
 

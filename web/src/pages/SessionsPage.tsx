@@ -251,6 +251,11 @@ function SessionRow({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {session.runtime_label && (
+            <Badge variant="outline" className="text-[10px]">
+              {session.runtime_label}
+            </Badge>
+          )}
           <Badge variant="outline" className="text-[10px]">
             {session.source ?? "local"}
           </Badge>
@@ -294,6 +299,9 @@ function SessionRow({
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [total, setTotal] = useState(0);
+  const [scope, setScope] = useState<string>("aggregated");
+  const [runtimeHome, setRuntimeHome] = useState<string>("");
+  const [runtimeCount, setRuntimeCount] = useState(0);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 20;
   const [loading, setLoading] = useState(true);
@@ -311,6 +319,9 @@ export default function SessionsPage() {
       .then((resp) => {
         setSessions(resp.sessions);
         setTotal(resp.total);
+        setScope(resp.scope ?? "aggregated");
+        setRuntimeHome(resp.runtime_home ?? "");
+        setRuntimeCount(resp.runtime_count ?? 0);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -318,6 +329,20 @@ export default function SessionsPage() {
 
   useEffect(() => {
     loadSessions(page);
+  }, [loadSessions, page]);
+
+  useEffect(() => {
+    const handleFocus = () => loadSessions(page);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") loadSessions(page);
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [loadSessions, page]);
 
   // Debounced FTS search
@@ -381,12 +406,21 @@ export default function SessionsPage() {
     <div className="flex flex-col gap-4">
       {/* Header outside card for lighter feel */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-base font-semibold">{t.sessions.title}</h1>
-          <Badge variant="secondary" className="text-xs">
-            {total}
-          </Badge>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5 text-muted-foreground" />
+            <h1 className="text-base font-semibold">{t.sessions.title}</h1>
+            <Badge variant="secondary" className="text-xs">
+              {total}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[0.7rem] text-muted-foreground/80">
+            <Badge variant="secondary">
+              {scope === "aggregated" ? "Aggregated" : scope}
+            </Badge>
+            {runtimeCount > 0 && <Badge variant="outline">{runtimeCount} runtimes</Badge>}
+            {runtimeHome && <code>{runtimeHome}</code>}
+          </div>
         </div>
         <div className="relative w-full sm:w-64">
           {searching ? (

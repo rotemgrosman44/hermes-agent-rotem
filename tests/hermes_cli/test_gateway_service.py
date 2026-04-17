@@ -1,5 +1,6 @@
 """Tests for gateway service management helpers."""
 
+import hashlib
 import os
 import pwd
 from pathlib import Path
@@ -998,6 +999,43 @@ class TestProfileArg:
         plist_path = gateway_cli.get_launchd_plist_path()
 
         assert plist_path == machine_home / "Library" / "LaunchAgents" / "ai.hermes.gateway-orcha.plist"
+
+
+class TestServiceName:
+    """Tests for get_service_name() under default, profile, and custom homes."""
+
+    def test_default_home_keeps_backward_compatible_service_name(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        assert gateway_cli.get_service_name() == "hermes-gateway"
+
+    def test_named_profile_uses_profile_suffix(self, tmp_path, monkeypatch):
+        profile_dir = tmp_path / ".hermes" / "profiles" / "mybot"
+        profile_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("HERMES_HOME", str(profile_dir))
+
+        assert gateway_cli.get_service_name() == "hermes-gateway-mybot"
+
+    def test_custom_home_uses_hash_suffix(self, tmp_path, monkeypatch):
+        custom_home = tmp_path / "custom" / "hermes"
+        custom_home.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("HERMES_HOME", str(custom_home))
+
+        expected = hashlib.sha256(str(custom_home.resolve()).encode()).hexdigest()[:8]
+        assert gateway_cli.get_service_name() == f"hermes-gateway-{expected}"
+
+    def test_custom_profile_uses_profile_name_instead_of_hash(self, tmp_path, monkeypatch):
+        profile_dir = tmp_path / "custom-root" / "profiles" / "sidecar"
+        profile_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("HERMES_HOME", str(profile_dir))
+
+        assert gateway_cli.get_service_name() == "hermes-gateway-sidecar"
 
 
 class TestRemapPathForUser:
