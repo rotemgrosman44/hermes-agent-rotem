@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Routes, Route, NavLink, Navigate } from "react-router-dom";
+import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import {
   Activity, BarChart3, Clock, FileText, KeyRound,
   MessageSquare, Package, Settings, Puzzle,
@@ -7,6 +7,7 @@ import {
   Wrench, Zap, Heart, Star, Code, Eye,
 } from "lucide-react";
 import StatusPage from "@/pages/StatusPage";
+import SurfacesPage from "@/pages/SurfacesPage";
 import ConfigPage from "@/pages/ConfigPage";
 import EnvPage from "@/pages/EnvPage";
 import SessionsPage from "@/pages/SessionsPage";
@@ -33,6 +34,7 @@ interface NavItem {
 
 const BUILTIN_NAV: NavItem[] = [
   { path: "/", labelKey: "status", label: "Status", icon: Activity },
+  { path: "/surfaces", label: "Services", icon: Globe },
   { path: "/sessions", labelKey: "sessions", label: "Sessions", icon: MessageSquare },
   { path: "/analytics", labelKey: "analytics", label: "Analytics", icon: BarChart3 },
   { path: "/logs", labelKey: "logs", label: "Logs", icon: FileText },
@@ -96,6 +98,8 @@ function buildNavItems(builtIn: NavItem[], plugins: RegisteredPlugin[]): NavItem
 export default function App() {
   const { t } = useI18n();
   const { plugins } = usePlugins();
+  const location = useLocation();
+  const isSurfacesRoute = location.pathname === "/surfaces";
 
   const navItems = useMemo(
     () => buildNavItems(BUILTIN_NAV, plugins),
@@ -155,9 +159,14 @@ export default function App() {
         </div>
       </header>
 
-      <main className="workspace-daylight relative z-2 mx-auto w-full max-w-[1400px] flex-1 px-3 sm:px-6 pt-16 sm:pt-20 pb-4 sm:pb-8">
+      <main
+        className={`workspace-daylight relative z-2 mx-auto w-full flex-1 px-3 sm:px-6 pt-16 sm:pt-20 pb-4 sm:pb-8 ${
+          isSurfacesRoute ? "max-w-[1680px]" : "max-w-[1400px]"
+        }`}
+      >
         <Routes>
           <Route path="/" element={<StatusPage />} />
+          <Route path="/surfaces" element={<SurfacesPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/logs" element={<LogsPage />} />

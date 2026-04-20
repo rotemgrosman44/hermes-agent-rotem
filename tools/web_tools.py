@@ -288,7 +288,7 @@ _TAVILY_BASE_URL = "https://api.tavily.com"
 def _tavily_request(endpoint: str, payload: dict) -> dict:
     """Send a POST request to the Tavily API.
 
-    Auth is provided via ``api_key`` in the JSON body (no header-based auth).
+    Auth is provided via the official ``Authorization: Bearer`` header.
     Raises ``ValueError`` if ``TAVILY_API_KEY`` is not set.
     """
     api_key = os.getenv("TAVILY_API_KEY")
@@ -297,10 +297,14 @@ def _tavily_request(endpoint: str, payload: dict) -> dict:
             "TAVILY_API_KEY environment variable not set. "
             "Get your API key at https://app.tavily.com/home"
         )
-    payload["api_key"] = api_key
     url = f"{_TAVILY_BASE_URL}/{endpoint.lstrip('/')}"
     logger.info("Tavily %s request to %s", endpoint, url)
-    response = httpx.post(url, json=payload, timeout=60)
+    response = httpx.post(
+        url,
+        json=payload,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=60,
+    )
     response.raise_for_status()
     return response.json()
 

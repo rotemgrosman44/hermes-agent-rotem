@@ -4163,7 +4163,14 @@ class GatewayRunner:
             # Auto voice reply: send TTS audio before the text response
             _already_sent = bool(agent_result.get("already_sent"))
             if self._should_send_voice_reply(event, response, agent_messages, already_sent=_already_sent):
-                await self._send_voice_reply(event, response)
+                _voice_reply_sent = await self._send_voice_reply(event, response)
+                if _voice_reply_sent:
+                    _media_adapter = self.adapters.get(source.platform)
+                    if _media_adapter:
+                        await self._deliver_media_from_response(
+                            response, event, _media_adapter,
+                        )
+                    return None
 
             # If streaming already delivered the response, extract and
             # deliver any MEDIA: files before returning None.  Streaming
@@ -5424,13 +5431,13 @@ class GatewayRunner:
         Returns False when:
         - voice_mode is off for this chat
         - response is empty or an error
+        - text has already been streamed to the user
         - agent already called text_to_speech tool (dedup)
         - voice input and base adapter auto-TTS already handled it (skip_double)
-          UNLESS streaming already consumed the response (already_sent=True),
-          in which case the base adapter won't have text for auto-TTS so the
-          runner must handle it.
         """
         if not response or response.startswith("Error:"):
+            return False
+        if already_sent:
             return False
 
         chat_id = event.source.chat_id
@@ -5458,25 +5465,26 @@ class GatewayRunner:
 
         # Dedup: base adapter auto-TTS already handles voice input
         # (play_tts plays in VC when connected, so runner can skip).
-        # When streaming already delivered the text (already_sent=True),
-        # the base adapter will receive None and can't run auto-TTS,
-        # so the runner must take over.
-        if is_voice_input and not already_sent:
+        if is_voice_input:
             return False
 
         return True
 
-    async def _send_voice_reply(self, event: MessageEvent, text: str) -> None:
+    async def _send_voice_reply(self, event: MessageEvent, text: str) -> bool:
         """Generate TTS audio and send as a voice message before the text reply."""
         import uuid as _uuid
         audio_path = None
         actual_path = None
         try:
-            from tools.tts_tool import text_to_speech_tool, _strip_markdown_for_tts
+            from tools.tts_tool import (
+                _strip_markdown_for_tts,
+                is_speakable_tts_text,
+                text_to_speech_tool,
+            )
 
             tts_text = _strip_markdown_for_tts(text[:4000])
-            if not tts_text:
-                return
+            if not tts_text or not is_speakable_tts_text(tts_text):
+                return False
 
             # Use .mp3 extension so edge-tts conversion to opus works correctly.
             # The TTS tool may convert to .ogg — use file_path from result.
@@ -5495,7 +5503,7 @@ class GatewayRunner:
             actual_path = result.get("file_path", audio_path)
             if not result.get("success") or not os.path.isfile(actual_path):
                 logger.warning("Auto voice reply TTS failed: %s", result.get("error"))
-                return
+                return False
 
             adapter = self.adapters.get(event.source.platform)
 
@@ -5506,6 +5514,7 @@ class GatewayRunner:
                     and hasattr(adapter, "is_in_voice_channel")
                     and adapter.is_in_voice_channel(guild_id)):
                 await adapter.play_in_voice_channel(guild_id, actual_path)
+                return True
             elif adapter and hasattr(adapter, "send_voice"):
                 send_kwargs: Dict[str, Any] = {
                     "chat_id": event.source.chat_id,
@@ -5515,8 +5524,11 @@ class GatewayRunner:
                 if event.source.thread_id:
                     send_kwargs["metadata"] = {"thread_id": event.source.thread_id}
                 await adapter.send_voice(**send_kwargs)
+                return True
+            return False
         except Exception as e:
             logger.warning("Auto voice reply failed: %s", e, exc_info=True)
+            return False
         finally:
             for p in {audio_path, actual_path} - {None}:
                 try:

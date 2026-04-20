@@ -217,6 +217,437 @@ def _dashboard_scope_meta(scope: str) -> Dict[str, Any]:
     }
 
 
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _first_nonempty_line(path: Path) -> str:
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line:
+                return line
+    except Exception:
+        pass
+    return ""
+
+
+def _load_channel_entries(home: Path, platform: str) -> List[Dict[str, Any]]:
+    data = _read_json_file(home / "channel_directory.json")
+    return list(data.get("platforms", {}).get(platform, []) or [])
+
+
+def _platform_state(home: Path, platform: str) -> Dict[str, Any]:
+    status = _load_runtime_status_for(home)
+    return dict(status.get("platforms", {}).get(platform, {}) or {})
+
+
+def _surface_identity_label(home: Path, fallback: str) -> str:
+    first_line = _first_nonempty_line(home / "SOUL.md")
+    if first_line.lower().startswith("you are "):
+        return first_line[8:].rstrip(".")
+    return first_line or fallback
+
+
+def _display_channel(entry: Dict[str, Any]) -> str:
+    name = (entry.get("name") or "").strip()
+    channel_id = (entry.get("id") or "").strip()
+    if name and channel_id:
+        return f"{name} ({channel_id})"
+    return name or channel_id or "unknown"
+
+
+def _portal_reachable(url: Optional[str]) -> Optional[bool]:
+    if not url:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.hostname not in {"127.0.0.1", "localhost"}:
+            return None
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=0.6) as response:
+            return 200 <= int(response.status) < 500
+    except Exception:
+        return False
+
+
+def _human_state_for(
+    *,
+    scope: str,
+    connection_state: str,
+    onboarding_commands: List[str],
+) -> str:
+    if scope == "external_portal":
+        return "External"
+    if connection_state in {"connected", "running"}:
+        return "Running"
+    if onboarding_commands:
+        return "Needs Rotem"
+    return "Blocked"
+
+
+def _surface_quick_panel(current_home: Path, operator_home: Path) -> Dict[str, Any]:
+    return {
+        "title": "Quick Actions",
+        "title_he": "פעולות חשובות",
+        "sections": [
+            {
+                "id": "main-checks",
+                "title": "Main checks",
+                "title_he": "בדיקות ל-main",
+                "items": [
+                    {
+                        "id": "main-status",
+                        "kind": "command",
+                        "label": "Status main service",
+                        "label_he": "בדוק את שירות ה-main",
+                        "value": "systemctl --user status hermes-gateway-madhatter.service --no-pager",
+                        "note": "Use this first when the WhatsApp lane looks wrong.",
+                    },
+                    {
+                        "id": "main-restart",
+                        "kind": "command",
+                        "label": "Restart main service",
+                        "label_he": "הפעל מחדש את שירות ה-main",
+                        "value": "systemctl --user restart hermes-gateway-madhatter.service",
+                        "note": "Safe restart for Hermes main on the laptop.",
+                    },
+                    {
+                        "id": "main-whatsapp",
+                        "kind": "command",
+                        "label": "WhatsApp re-pair",
+                        "label_he": "זיווג מחדש ל-WhatsApp",
+                        "value": "HERMES_HOME=/home/rotemg/.hermes/profiles/madhatter hermes whatsapp",
+                        "note": "Use only when WhatsApp pairing or session state is broken.",
+                    },
+                ],
+            },
+            {
+                "id": "operator-checks",
+                "title": "Operator checks",
+                "title_he": "בדיקות לאופרטור",
+                "items": [
+                    {
+                        "id": "operator-status",
+                        "kind": "command",
+                        "label": "Status operator service",
+                        "label_he": "בדוק את שירות האופרטור",
+                        "value": "systemctl --user status hermes-twitter-operator-gateway.service --no-pager",
+                        "note": "Read this first when the Telegram or X lane looks stuck.",
+                    },
+                    {
+                        "id": "operator-stop",
+                        "kind": "command",
+                        "label": "Stop operator service",
+                        "label_he": "עצור את שירות האופרטור",
+                        "value": "systemctl --user stop hermes-twitter-operator-gateway.service",
+                        "note": "Fast emergency stop for the Twitter operator lane.",
+                    },
+                    {
+                        "id": "operator-restart",
+                        "kind": "command",
+                        "label": "Restart operator service",
+                        "label_he": "הפעל מחדש את שירות האופרטור",
+                        "value": "systemctl --user restart hermes-twitter-operator-gateway.service",
+                        "note": "Use after a stop or after local fixes.",
+                    },
+                    {
+                        "id": "operator-setup",
+                        "kind": "command",
+                        "label": "Telegram setup",
+                        "label_he": "הגדרת Telegram",
+                        "value": "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes gateway setup",
+                        "note": "Canonical onboarding command for the Telegram control surface.",
+                    },
+                    {
+                        "id": "operator-pairing-list",
+                        "kind": "command",
+                        "label": "Pairing list",
+                        "label_he": "רשימת pairing",
+                        "value": "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing list",
+                        "note": "Shows pending Telegram pairing codes.",
+                    },
+                    {
+                        "id": "operator-pairing-approve",
+                        "kind": "command",
+                        "label": "Pairing approve",
+                        "label_he": "אשר pairing",
+                        "value": "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing approve telegram <CODE>",
+                        "note": "Approve a Telegram pairing code after verification.",
+                    },
+                ],
+            },
+            {
+                "id": "logs-checks",
+                "title": "Logs",
+                "title_he": "בדיקות",
+                "items": [
+                    {
+                        "id": "main-logs",
+                        "kind": "command",
+                        "label": "Main logs",
+                        "label_he": "לוגים של main",
+                        "value": "journalctl --user -u hermes-gateway-madhatter.service -n 80 --no-pager",
+                        "note": "Use when the WhatsApp lane looks active but behaves strangely.",
+                    },
+                    {
+                        "id": "operator-logs",
+                        "kind": "command",
+                        "label": "Operator logs",
+                        "label_he": "לוגים של האופרטור",
+                        "value": "journalctl --user -u hermes-twitter-operator-gateway.service -n 80 --no-pager",
+                        "note": "Use for blocked interval runs, pairing issues, or publish failures.",
+                    },
+                ],
+            },
+            {
+                "id": "jarvis-laptop-access",
+                "title": "Jarvis laptop access",
+                "title_he": "גישה לג'רוויס מהלפטופ",
+                "items": [
+                    {
+                        "id": "jarvis-webui-launcher",
+                        "kind": "path",
+                        "label": "Jarvis Web UI button",
+                        "label_he": "כפתור 06 לפתיחת Jarvis",
+                        "value": r"C:\Users\user\Desktop\HERMES ONBOARD\06 Jarvis MAIN Web UI (Laptop).cmd",
+                        "note": "Open this first. It creates the WSL-backed SSH tunnel and then opens Jarvis in the laptop browser. Keep its terminal open.",
+                    },
+                    {
+                        "id": "jarvis-ssh-launcher",
+                        "kind": "path",
+                        "label": "Jarvis SSH fallback",
+                        "label_he": "כפתור 07 לחיבור SSH למאק",
+                        "value": r"C:\Users\user\Desktop\HERMES ONBOARD\07 Jarvis MAIN SSH (Mac).cmd",
+                        "note": "Use this when the Web UI button cannot open. It does not run recovery commands automatically.",
+                    },
+                    {
+                        "id": "jarvis-main-url",
+                        "kind": "path",
+                        "label": "Jarvis MAIN URL after tunnel",
+                        "label_he": "קישור Jarvis MAIN אחרי tunnel",
+                        "value": "http://127.0.0.1:19101/chat?session=agent%3Amain%3Amain",
+                        "note": "This link is valid from the laptop only while button 06 keeps the SSH tunnel alive.",
+                    },
+                ],
+            },
+            {
+                "id": "recursive-loop",
+                "title": "Recursive loop",
+                "title_he": "לולאת שיפור",
+                "items": [
+                    {
+                        "id": "interval-reports",
+                        "kind": "path",
+                        "label": "Interval reports",
+                        "label_he": "דוחות אינטרוולים",
+                        "value": str(operator_home / "reports" / "intervals"),
+                        "note": "Read the latest operator round reports here.",
+                    },
+                    {
+                        "id": "cron-output",
+                        "kind": "path",
+                        "label": "Cron output",
+                        "label_he": "פלטי cron",
+                        "value": str(operator_home / "cron" / "output"),
+                        "note": "Use this when checking what happened in scheduled runs.",
+                    },
+                    {
+                        "id": "gate-scorecard",
+                        "kind": "path",
+                        "label": "Gate scorecard",
+                        "label_he": "ציון שערים",
+                        "value": str(operator_home / "state" / "twitter_gate_scorecard.json"),
+                        "note": "Canonical local scorecard for Gate A/B/C health.",
+                    },
+                ],
+            },
+            {
+                "id": "mac-coordination",
+                "title": "Mac coordination",
+                "title_he": "תיאום מול המאק",
+                "items": [
+                    {
+                        "id": "mac-query-pack",
+                        "kind": "path",
+                        "label": "Collegial diagnostic query",
+                        "label_he": "שאליתא קולגיאלית",
+                        "value": "/home/rotemg/.hermes/control/runbooks/jarvis-codex-collegial-diagnostic-query-2026-04-17.md",
+                        "note": "Use through the bridge only. Do not write into jarvis-canon from the laptop.",
+                    },
+                    {
+                        "id": "mac-activation-pack",
+                        "kind": "path",
+                        "label": "Short activation prompt",
+                        "label_he": "פרומפט הפעלה קצר",
+                        "value": "/home/rotemg/.hermes/control/runbooks/jarvis-codex-short-activation-prompt-2026-04-17.md",
+                        "note": "This prompt asks Codex/Jarvis on the Mac to validate the shared wiki model before any architecture change.",
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _jarvis_main_surface() -> Dict[str, Any]:
+    status_path = Path("/home/rotemg/work/jarvis-canon/STATUS.md")
+    launch_script = Path("/home/rotemg/work/jarvis-canon/scripts/jarvis-webui-open.sh")
+    portal_url = "http://127.0.0.1:19101/chat?session=agent%3Amain%3Amain"
+    return {
+        "id": "jarvis-main",
+        "label": "Jarvis MAIN",
+        "visual_label": "Jarvis MAIN / External Portal",
+        "visual_label_he": "ג'רוויס מיין / פורטל חיצוני",
+        "visual_role": "External",
+        "scope": "external_portal",
+        "identity": "Jarvis OpenClaw main session",
+        "runtime_home": None,
+        "service_name": "openclaw-gateway.service",
+        "platform": "webui",
+        "connection_state": "external",
+        "human_state": "External",
+        "action_modes": ["external"],
+        "channels": ["agent:main:main"],
+        "portal_url": portal_url,
+        "portal_reachable": _portal_reachable(portal_url),
+        "onboarding_commands": [],
+        "needs_rotem_reason": "Open Jarvis through button 06 in HERMES ONBOARD. The browser link works only while the SSH tunnel is open.",
+        "needs_rotem_reason_he": "פותחים את ג'רוויס דרך כפתור 06 בתיקיית HERMES ONBOARD. הקישור בדפדפן עובד רק כל עוד חלון ה־SSH tunnel פתוח.",
+        "brand_asset": "jarvis",
+        "diagnostic_pack_path": None,
+        "authority_paths": [str(status_path), str(launch_script)],
+        "notes": [
+            "Separate external portal. Keep Jarvis out of Hermes runtime state.",
+            "Local authority is read-only from jarvis-canon mirror files.",
+            "Tokenized access may still be required by the Jarvis lane itself.",
+        ],
+        "notes_he": [
+            "זהו פורטל חיצוני נפרד. לא מערבבים את Jarvis בתוך מצב הריצה של Hermes.",
+            "הסמכות המקומית נקראת רק מהמראה של jarvis-canon.",
+            "ייתכן שעדיין נדרש token או אימות בצד של Jarvis.",
+        ],
+    }
+
+
+def _collect_surface_cards() -> Dict[str, Any]:
+    current_home = get_hermes_home().resolve()
+    operator_home = (Path.home() / ".hermes-twitter-operator").resolve()
+
+    main_channels = _load_channel_entries(current_home, "whatsapp")
+    main_state = _platform_state(current_home, "whatsapp")
+    operator_channels = _load_channel_entries(operator_home, "telegram")
+    operator_state = _platform_state(operator_home, "telegram")
+
+    main_commands = [
+        "HERMES_HOME=/home/rotemg/.hermes/profiles/madhatter hermes whatsapp",
+    ]
+    operator_commands = [
+        "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes gateway setup",
+        "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing list",
+        "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing approve telegram <CODE>",
+    ]
+    main_connection_state = main_state.get("state", "unknown")
+    operator_connection_state = operator_state.get("state", "unknown")
+
+    cards: List[Dict[str, Any]] = [
+        {
+            "id": "hermes-main",
+            "label": "Hermes Main / WhatsApp",
+            "visual_label": "Hermes - The Mad Hatter / WhatsApp",
+            "visual_label_he": "הרמס - הכובען המטורף / וואטסאפ",
+            "visual_role": "Main",
+            "scope": "current_runtime",
+            "identity": _surface_identity_label(current_home, "Hermes The Mad Hatter"),
+            "runtime_home": str(current_home),
+            "service_name": "hermes-gateway-madhatter.service",
+            "platform": "whatsapp",
+            "connection_state": main_connection_state,
+            "human_state": _human_state_for(
+                scope="current_runtime",
+                connection_state=main_connection_state,
+                onboarding_commands=main_commands,
+            ),
+            "action_modes": ["technical", "men_in_the_loop"],
+            "channels": [_display_channel(entry) for entry in main_channels],
+            "portal_url": "http://127.0.0.1:9119",
+            "portal_reachable": True,
+            "onboarding_commands": main_commands,
+            "needs_rotem_reason": "Only touch this lane for WhatsApp re-pair or an explicit takeover decision.",
+            "needs_rotem_reason_he": "כאן מתערבים רק כשצריך זיווג מחדש ל-WhatsApp או החלטת takeover מפורשת.",
+            "brand_asset": "whatsapp",
+            "diagnostic_pack_path": "/home/rotemg/.hermes/control/runbooks/hermes-main-diagnostic-pack-2026-04-17.md",
+            "authority_paths": [
+                str(current_home / "SOUL.md"),
+                str(current_home / "config.yaml"),
+                str(current_home / "gateway_state.json"),
+                str(current_home / "channel_directory.json"),
+            ],
+            "notes": [
+                "Primary Hermes runtime on WhatsApp.",
+                "Use this lane for orchestration, supervision, and explicit takeover only.",
+            ],
+            "notes_he": [
+                "זהו ה-runtime הראשי של Hermes על WhatsApp.",
+                "הקו הזה מיועד לאורקסטרציה, סיכומים, דיאגנוסטיקה, ו-takeover מפורש בלבד.",
+            ],
+        },
+        {
+            "id": "twitter-operator",
+            "label": "Twitter Operator / Telegram",
+            "visual_label": "Hermes Twitter Operator / Telegram",
+            "visual_label_he": "אופרטור הטוויטר של הרמס / טלגרם",
+            "visual_role": "Operator",
+            "scope": "aggregated",
+            "identity": _surface_identity_label(operator_home, "Hermes Twitter Operator"),
+            "runtime_home": str(operator_home),
+            "service_name": "hermes-twitter-operator-gateway.service",
+            "platform": "telegram",
+            "connection_state": operator_connection_state,
+            "human_state": _human_state_for(
+                scope="aggregated",
+                connection_state=operator_connection_state,
+                onboarding_commands=operator_commands,
+            ),
+            "action_modes": ["technical", "men_in_the_loop"],
+            "channels": [_display_channel(entry) for entry in operator_channels],
+            "portal_url": None,
+            "portal_reachable": None,
+            "onboarding_commands": operator_commands,
+            "needs_rotem_reason": "Publish approvals and Telegram pairing remain Rotem-gated on this lane.",
+            "needs_rotem_reason_he": "אישורי פרסום ו-pairing של טלגרם נשארים מאושרי-רותם בקו הזה.",
+            "brand_asset": "telegram",
+            "diagnostic_pack_path": "/home/rotemg/.hermes/control/runbooks/hermes-twitter-operator-diagnostic-pack-2026-04-17.md",
+            "authority_paths": [
+                "/home/rotemg/.hermes-twitter-operator/control/twitter-operator/HERMES_TWITTER_OPERATOR_PACKET.md",
+                "/home/rotemg/.hermes-twitter-operator/control/twitter-operator/HERMES_TWITTER_GATE_CONTRACT.md",
+                "/home/rotemg/.hermes-twitter-operator/control/twitter-operator/HERMES_TWITTER_TELEGRAM_READINESS.md",
+                "/home/rotemg/.hermes-twitter-operator/gateway_state.json",
+                "/home/rotemg/.hermes-twitter-operator/channel_directory.json",
+            ],
+            "notes": [
+                "Dedicated approval-first supervised operator runtime.",
+                "Telegram is the control surface. WhatsApp stays disabled for this runtime.",
+            ],
+            "notes_he": [
+                "זהו runtime ייעודי במצב approval-first supervised.",
+                "טלגרם הוא משטח השליטה. WhatsApp נשאר כבוי עבור ה-runtime הזה.",
+            ],
+        },
+        _jarvis_main_surface(),
+    ]
+
+    return {
+        **_dashboard_scope_meta("mixed"),
+        "cards": cards,
+        "quick_panel": _surface_quick_panel(current_home, operator_home),
+    }
+
+
 def _encode_runtime_home(home: Path) -> str:
     raw = str(home.resolve()).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -343,7 +774,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "tts.provider": {
         "type": "select",
         "description": "Text-to-speech provider",
-        "options": ["edge", "elevenlabs", "openai", "neutts"],
+        "options": ["edge", "deepdub", "elevenlabs", "openai", "neutts"],
     },
     "stt.provider": {
         "type": "select",
@@ -559,12 +990,28 @@ def _probe_gateway_health() -> tuple[bool, dict | None]:
 async def get_status():
     current_ver, latest_ver = check_config_version()
     config = load_config()
+    env_on_disk = load_env()
     fallback_cfg = config.get("fallback_model")
     fallback_model = ""
     fallback_provider = ""
     if isinstance(fallback_cfg, dict):
         fallback_model = str(fallback_cfg.get("model") or "")
         fallback_provider = str(fallback_cfg.get("provider") or "")
+    web_cfg = config.get("web") if isinstance(config.get("web"), dict) else {}
+    web_backend = str(web_cfg.get("backend") or "").strip().lower()
+    if not web_backend:
+        if env_on_disk.get("EXA_API_KEY") and not any(
+            env_on_disk.get(key) for key in ("PARALLEL_API_KEY", "FIRECRAWL_API_KEY", "TAVILY_API_KEY")
+        ):
+            web_backend = "exa"
+        elif env_on_disk.get("TAVILY_API_KEY") and not any(
+            env_on_disk.get(key) for key in ("PARALLEL_API_KEY", "FIRECRAWL_API_KEY")
+        ):
+            web_backend = "tavily"
+        elif env_on_disk.get("PARALLEL_API_KEY") and not env_on_disk.get("FIRECRAWL_API_KEY"):
+            web_backend = "parallel"
+        else:
+            web_backend = "firecrawl"
 
     # --- Gateway liveness detection ---
     # Try local PID check first (same-host).  If that fails and a remote
@@ -653,6 +1100,13 @@ async def get_status():
         "latest_config_version": latest_ver,
         "fallback_model": fallback_model,
         "fallback_provider": fallback_provider,
+        "web_backend": web_backend,
+        "web_key_configured": {
+            "tavily": bool(env_on_disk.get("TAVILY_API_KEY")),
+            "firecrawl": bool(env_on_disk.get("FIRECRAWL_API_KEY")),
+            "parallel": bool(env_on_disk.get("PARALLEL_API_KEY")),
+            "exa": bool(env_on_disk.get("EXA_API_KEY")),
+        },
         "gateway_running": gateway_running,
         "gateway_pid": gateway_pid,
         "gateway_state": gateway_state,
@@ -662,6 +1116,7 @@ async def get_status():
         "active_sessions": active_sessions,
         "ui_scopes": {
             "status": "mixed",
+            "surfaces": "mixed",
             "sessions": "aggregated",
             "env": "current_runtime",
             "skills": "current_runtime",
@@ -707,6 +1162,15 @@ async def get_sessions(limit: int = 20, offset: int = 0):
         }
     except Exception as e:
         _log.exception("GET /api/sessions failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/api/surfaces")
+async def get_surfaces():
+    try:
+        return _collect_surface_cards()
+    except Exception:
+        _log.exception("GET /api/surfaces failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

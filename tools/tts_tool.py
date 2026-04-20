@@ -2,13 +2,14 @@
 """
 Text-to-Speech Tool Module
 
-Supports six TTS providers:
+Supports seven TTS providers:
 - Edge TTS (default, free, no API key): Microsoft Edge neural voices
 - ElevenLabs (premium): High-quality voices, needs ELEVENLABS_API_KEY
 - OpenAI TTS: Good quality, needs OPENAI_API_KEY
 - MiniMax TTS: High-quality with voice cloning, needs MINIMAX_API_KEY
 - Mistral (Voxtral TTS): Multilingual, native Opus, needs MISTRAL_API_KEY
 - NeuTTS (local, free, no API key): On-device TTS via neutts_cli, needs neutts installed
+- DeepDub (Hebrew): DeepDub REST with deterministic Opus conversion
 
 Output formats:
 - Opus (.ogg) for Telegram voice bubbles (requires ffmpeg for Edge TTS)
@@ -35,6 +36,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Callable, Dict, Any, Optional
@@ -100,6 +102,20 @@ DEFAULT_XAI_LANGUAGE = "en"
 DEFAULT_XAI_SAMPLE_RATE = 24000
 DEFAULT_XAI_BIT_RATE = 128000
 DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
+DEFAULT_DEEPDUB_API_URL = "https://restapi.deepdub.ai/api/v1/tts"
+DEFAULT_DEEPDUB_MODEL = "dd-etts-3.0"
+DEFAULT_DEEPDUB_LOCALE = "he-IL"
+DEFAULT_DEEPDUB_PROFILE = "male"
+DEEPDUB_VOICE_PROFILES = {
+    "male": {
+        "voice_prompt_id": "f0c91054-ca6e-4ad6-831d-5fd7921ea944",
+        "label": "Male Storyteller",
+    },
+    "female": {
+        "voice_prompt_id": "fb158c16-af06-4a90-abbe-3599c942dd66_prompt-V2-Spontaneous-Speech",
+        "label": "Female Sales Agent (Neutral)",
+    },
+}
 
 def _get_default_output_dir() -> str:
     from hermes_constants import get_hermes_dir
@@ -107,6 +123,26 @@ def _get_default_output_dir() -> str:
 
 DEFAULT_OUTPUT_DIR = _get_default_output_dir()
 MAX_TEXT_LENGTH = 4000
+
+
+def is_speakable_tts_text(text: str) -> bool:
+    """Return True only when text has letters or numbers worth speaking.
+
+    Emoji-only, punctuation-only, MEDIA directives, and empty markdown should
+    remain text-only instead of wasting a voice message.
+    """
+    if not text:
+        return False
+    try:
+        cleaned = _strip_markdown_for_tts(text)
+    except NameError:
+        cleaned = text
+    cleaned = cleaned.replace("[[audio_as_voice]]", "")
+    cleaned = re.sub(r"MEDIA:\s*\S+", " ", cleaned)
+    for char in cleaned.strip():
+        if unicodedata.category(char)[0] in {"L", "N"}:
+            return True
+    return False
 
 
 # ===========================================================================
@@ -177,6 +213,25 @@ def _convert_to_opus(mp3_path: str) -> Optional[str]:
     except Exception as e:
         logger.warning("ffmpeg OGG conversion failed: %s", e, exc_info=True)
     return None
+
+
+def _transcode_to_opus(input_path: str, output_path: str) -> str:
+    """Convert arbitrary audio to Telegram-safe mono Ogg Opus."""
+    if not _has_ffmpeg():
+        raise FileNotFoundError("ffmpeg not found in PATH")
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", input_path,
+            "-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1",
+            output_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "ffmpeg failed")[:300])
+    return output_path
 
 
 # ===========================================================================
@@ -527,6 +582,62 @@ def _generate_mistral_tts(text: str, output_path: str, tts_config: Dict[str, Any
 
 
 # ===========================================================================
+# Provider: DeepDub Hebrew TTS
+# ===========================================================================
+def _resolve_deepdub_api_key() -> str:
+    return (
+        os.getenv("DEEPDUB_API_KEY", "").strip()
+        or os.getenv("DEEPDUB_TRIAL_KEY", "").strip()
+    )
+
+
+def _generate_deepdub_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
+    """Generate Hebrew speech using DeepDub REST and normalize Telegram audio."""
+    import requests
+
+    dd_config = tts_config.get("deepdub", {})
+    profile = str(dd_config.get("profile") or DEFAULT_DEEPDUB_PROFILE).strip().lower()
+    if profile not in DEEPDUB_VOICE_PROFILES:
+        profile = DEFAULT_DEEPDUB_PROFILE
+
+    profile_data = DEEPDUB_VOICE_PROFILES[profile]
+    api_key = _resolve_deepdub_api_key()
+    if not api_key:
+        raise ValueError("DEEPDUB_API_KEY not set")
+
+    payload = {
+        "model": dd_config.get("model") or DEFAULT_DEEPDUB_MODEL,
+        "targetText": text,
+        "locale": dd_config.get("locale") or DEFAULT_DEEPDUB_LOCALE,
+        "voicePromptId": dd_config.get("voice_prompt_id") or profile_data["voice_prompt_id"],
+        "format": "mp3",
+    }
+    response = requests.post(
+        dd_config.get("api_url") or DEFAULT_DEEPDUB_API_URL,
+        headers={"Content-Type": "application/json", "x-api-key": api_key},
+        json=payload,
+        timeout=int(dd_config.get("timeout", 45)),
+    )
+    if response.status_code != 200 or not response.content:
+        raise RuntimeError(f"DeepDub HTTP {response.status_code}")
+
+    if output_path.endswith(".ogg"):
+        raw_path = output_path.rsplit(".", 1)[0] + ".deepdub.mp3"
+        try:
+            Path(raw_path).write_bytes(response.content)
+            _transcode_to_opus(raw_path, output_path)
+        finally:
+            try:
+                os.remove(raw_path)
+            except OSError:
+                pass
+    else:
+        Path(output_path).write_bytes(response.content)
+
+    return output_path
+
+
+# ===========================================================================
 # NeuTTS (local, on-device TTS via neutts_cli)
 # ===========================================================================
 
@@ -634,6 +745,9 @@ def text_to_speech_tool(
         logger.warning("TTS text too long (%d chars), truncating to %d", len(text), MAX_TEXT_LENGTH)
         text = text[:MAX_TEXT_LENGTH]
 
+    if not is_speakable_tts_text(text):
+        return tool_error("TTS skipped: no speakable text", success=False)
+
     tts_config = _load_tts_config()
     provider = _get_provider(tts_config)
 
@@ -652,9 +766,8 @@ def text_to_speech_tool(
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = Path(DEFAULT_OUTPUT_DIR)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # Use .ogg for Telegram with providers that support native Opus output,
-        # otherwise fall back to .mp3 (Edge TTS will attempt ffmpeg conversion later).
-        if want_opus and provider in ("openai", "elevenlabs", "mistral"):
+        # Use .ogg for Telegram with providers that can produce or normalize Opus.
+        if want_opus and provider in ("openai", "elevenlabs", "mistral", "deepdub"):
             file_path = out_dir / f"tts_{timestamp}.ogg"
         else:
             file_path = out_dir / f"tts_{timestamp}.mp3"
@@ -706,6 +819,10 @@ def text_to_speech_tool(
                 }, ensure_ascii=False)
             logger.info("Generating speech with Mistral Voxtral TTS...")
             _generate_mistral_tts(text, file_str, tts_config)
+
+        elif provider == "deepdub":
+            logger.info("Generating speech with DeepDub TTS...")
+            _generate_deepdub_tts(text, file_str, tts_config)
 
         elif provider == "neutts":
             if not _check_neutts_available():
@@ -761,7 +878,7 @@ def text_to_speech_tool(
             if opus_path:
                 file_str = opus_path
                 voice_compatible = True
-        elif provider in ("elevenlabs", "openai", "mistral"):
+        elif provider in ("elevenlabs", "openai", "mistral", "deepdub"):
             voice_compatible = file_str.endswith(".ogg")
 
         file_size = os.path.getsize(file_str)
@@ -810,6 +927,13 @@ def check_tts_requirements() -> bool:
     Returns:
         bool: True if at least one provider can work.
     """
+    try:
+        provider = _get_provider(_load_tts_config())
+        if provider == "deepdub":
+            import requests  # noqa: F401
+            return bool(_resolve_deepdub_api_key())
+    except Exception:
+        pass
     try:
         _import_edge_tts()
         return True

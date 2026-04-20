@@ -359,8 +359,9 @@ class TestSendVoiceReply:
              patch("os.path.isfile", return_value=True), \
              patch("os.unlink"), \
              patch("os.makedirs"):
-            await runner._send_voice_reply(event, "Hello world")
+            result = await runner._send_voice_reply(event, "Hello world")
 
+        assert result is True
         mock_adapter.send_voice.assert_called_once()
         call_args = mock_adapter.send_voice.call_args
         assert call_args.kwargs.get("chat_id") == "123"
@@ -371,8 +372,20 @@ class TestSendVoiceReply:
 
         with patch("tools.tts_tool.text_to_speech_tool") as mock_tts, \
              patch("tools.tts_tool._strip_markdown_for_tts", return_value=""):
-            await runner._send_voice_reply(event, "```code only```")
+            result = await runner._send_voice_reply(event, "```code only```")
 
+        assert result is False
+        mock_tts.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_emoji_only_text_skips_tts(self, runner):
+        event = _make_event()
+
+        with patch("tools.tts_tool.text_to_speech_tool") as mock_tts, \
+             patch("tools.tts_tool._strip_markdown_for_tts", return_value="😊✅"):
+            result = await runner._send_voice_reply(event, "😊✅")
+
+        assert result is False
         mock_tts.assert_not_called()
 
     @pytest.mark.asyncio
@@ -386,8 +399,9 @@ class TestSendVoiceReply:
              patch("tools.tts_tool._strip_markdown_for_tts", side_effect=lambda t: t), \
              patch("os.path.isfile", return_value=False), \
              patch("os.makedirs"):
-            await runner._send_voice_reply(event, "Hello")
+            result = await runner._send_voice_reply(event, "Hello")
 
+        assert result is False
         mock_adapter.send_voice.assert_not_called()
 
     @pytest.mark.asyncio
@@ -397,7 +411,8 @@ class TestSendVoiceReply:
              patch("tools.tts_tool._strip_markdown_for_tts", side_effect=lambda t: t), \
              patch("os.makedirs"):
             # Should not raise
-            await runner._send_voice_reply(event, "Hello")
+            result = await runner._send_voice_reply(event, "Hello")
+        assert result is False
 
 
 # =====================================================================
@@ -2578,16 +2593,16 @@ class TestVoiceTTSPlayback:
     # -- Streaming ON (already_sent=True) --
 
     def test_streaming_on_voice_input_runner_fires(self):
-        """Streaming ON + voice input: runner handles TTS (base adapter has no text)."""
+        """Streaming ON + voice input: no TTS after text was already streamed."""
         from gateway.platforms.base import MessageType
         runner = self._make_runner()
-        assert self._call_should_reply(runner, "all", MessageType.VOICE, already_sent=True) is True
+        assert self._call_should_reply(runner, "all", MessageType.VOICE, already_sent=True) is False
 
     def test_streaming_on_text_input_runner_fires(self):
-        """Streaming ON + text input: runner handles TTS (same as before)."""
+        """Streaming ON + text input: no TTS after text was already streamed."""
         from gateway.platforms.base import MessageType
         runner = self._make_runner()
-        assert self._call_should_reply(runner, "all", MessageType.TEXT, already_sent=True) is True
+        assert self._call_should_reply(runner, "all", MessageType.TEXT, already_sent=True) is False
 
     def test_streaming_on_voice_off_no_tts(self):
         """Streaming ON + voice_mode=off: no TTS regardless of streaming."""

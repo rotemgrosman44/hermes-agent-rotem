@@ -507,6 +507,25 @@ class TestParallelClientConfig:
 class TestWebSearchErrorHandling:
     """Test suite for web_search_tool() error responses."""
 
+    def test_tavily_request_uses_bearer_auth_header(self):
+        import tools.web_tools
+
+        response = MagicMock()
+        response.json.return_value = {"ok": True}
+
+        payload = {"query": "test query"}
+        with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test"}, clear=False), \
+             patch("tools.web_tools.httpx.post", return_value=response) as mock_post:
+            result = tools.web_tools._tavily_request("search", payload)
+
+        assert result == {"ok": True}
+        response.raise_for_status.assert_called_once()
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        assert kwargs["json"] == {"query": "test query"}
+        assert "api_key" not in kwargs["json"]
+        assert kwargs["headers"] == {"Authorization": "Bearer tvly-test"}
+
     def test_search_error_response_does_not_expose_diagnostics(self):
         import tools.web_tools
 

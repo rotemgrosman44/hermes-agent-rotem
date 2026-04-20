@@ -36,6 +36,7 @@ async function getSessionToken(): Promise<string> {
 
 export const api = {
   getStatus: () => fetchJSON<StatusResponse>("/api/status"),
+  getSurfaces: () => fetchJSON<SurfacesResponse>("/api/surfaces"),
   getSessions: (limit = 20, offset = 0) =>
     fetchJSON<PaginatedSessions>(`/api/sessions?limit=${limit}&offset=${offset}`),
   getSessionMessages: (id: string) =>
@@ -216,6 +217,8 @@ export interface StatusResponse {
   env_path: string;
   fallback_model?: string;
   fallback_provider?: string;
+  web_backend?: string;
+  web_key_configured?: Record<string, boolean>;
   gateway_exit_reason: string | null;
   gateway_pid: number | null;
   gateway_platforms: Record<string, PlatformStatus>;
@@ -227,6 +230,62 @@ export interface StatusResponse {
   release_date: string;
   ui_scopes?: Record<string, string>;
   version: string;
+}
+
+export interface SurfaceCard {
+  id: string;
+  label: string;
+  visual_label: string;
+  visual_label_he: string;
+  visual_role: string;
+  scope: string;
+  identity: string;
+  runtime_home: string | null;
+  service_name: string;
+  platform: string;
+  connection_state: string;
+  human_state: string;
+  action_modes: string[];
+  channels: string[];
+  portal_url: string | null;
+  portal_reachable: boolean | null;
+  onboarding_commands: string[];
+  needs_rotem_reason: string | null;
+  needs_rotem_reason_he: string | null;
+  brand_asset: string | null;
+  diagnostic_pack_path: string | null;
+  authority_paths: string[];
+  notes: string[];
+  notes_he: string[];
+}
+
+export interface SurfaceQuickPanelItem {
+  id: string;
+  kind: "command" | "path" | "note";
+  label: string;
+  label_he: string;
+  value: string;
+  note?: string | null;
+}
+
+export interface SurfaceQuickPanelSection {
+  id: string;
+  title: string;
+  title_he: string;
+  items: SurfaceQuickPanelItem[];
+}
+
+export interface SurfaceQuickPanel {
+  title: string;
+  title_he: string;
+  sections: SurfaceQuickPanelSection[];
+}
+
+export interface SurfacesResponse {
+  scope: string;
+  runtime_home: string;
+  cards: SurfaceCard[];
+  quick_panel: SurfaceQuickPanel;
 }
 
 export interface RuntimeRef {
