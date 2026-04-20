@@ -1,7 +1,7 @@
 ---
 name: xitter
 description: Interact with X/Twitter via the x-cli terminal client using official X API credentials. Use for posting, reading timelines, searching tweets, liking, retweeting, bookmarks, mentions, and user lookups.
-version: 1.0.0
+version: 1.0.1
 author: Siddharth Balyan + Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -15,6 +15,13 @@ metadata:
 ---
 
 # Xitter — X/Twitter via x-cli
+
+Important Hermes Twitter Operator note:
+- This bundled x-cli skill is not the full operator contract for Rotem's Twitter lane.
+- For the active Hermes Twitter Operator, prefer `/home/rotemg/.hermes/skills/social-media/xitter/SKILL.md` through the `HERMES_HOME=/home/rotemg/.hermes-twitter-operator` skills symlink.
+- Do not treat x-cli as the only route when Gate A browser publishing is required.
+- Before any Gate A browser publish, measure the live viewport/ratio. If the X window is half-screen, cropped, or zoomed, use DOM-based exact tweet targeting instead of visual click position.
+- For media uploads, use only `/home/rotemg/.hermes-twitter-operator/authorized-media` or an exact filename Rotem approved in the current run. Do not choose clips from Screen Recordings, Downloads, screenshots, or generic local folders.
 
 Use `x-cli` for official X/Twitter API interactions from the terminal.
 
