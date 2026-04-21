@@ -6,10 +6,16 @@ This runbook captures the safe operator commands for the Rotem laptop Hermes run
 
 - Runtime root: `/home/rotemg/.hermes`
 - Project repo: `/home/rotemg/.hermes/hermes-agent`
-- Working branch: `codex/hermes-rotem-laptop-2026-04-20`
+- Canonical branch: `main`
 - Gateway profile: `madhatter`
 
-Do not use `upstream/main` as a pre-demo update source unless a separate release review explicitly approves it.
+`main` is the Rotem fork canonical branch. GitHub's default branch must also be `main` so new checkouts, PRs, and agents land on the same source of truth.
+
+Legacy branch `codex/hermes-rotem-laptop-2026-04-20` is a transitional fallback only. It must not be treated as canonical, and it should not receive new work unless a recovery procedure explicitly says so.
+
+`upstream/main` is the NousResearch source repository. It is an update input for a separate release-review workflow, not the live Rotem runtime branch.
+
+The runtime-safe baseline snapshot under `/home/rotemg/.hermes/_sos` is the recovery baseline. It is not a second live Hermes instance and must not be run in parallel with the primary gateway.
 
 ## Health Checks
 
@@ -62,10 +68,32 @@ git ls-remote origin "refs/heads/$(git branch --show-current)"
 
 The local and remote SHA values must match after push.
 
+## Canonical Branch Checks
+
+Use these checks when verifying that the repo is aligned:
+
+```bash
+git status --short --branch
+git remote show origin
+git rev-parse HEAD
+git ls-remote origin refs/heads/main
+sed -n '1,120p' /home/rotemg/.hermes/_sos/manifests/latest-summary.md
+```
+
+Expected:
+
+- Local branch is `main`.
+- `origin/main` equals local `HEAD`.
+- GitHub remote reports `HEAD branch: main`.
+- Latest runtime-safe baseline snapshot reports `repo_branch: main`.
+- Snapshot `repo_head` equals `origin/main`.
+
 ## Before A Demo
 
 - Do not merge unreleased `upstream/main`.
 - Do not stop healthy services.
 - Run the health checks above.
 - Confirm GitHub has the intended branch SHA.
+- Confirm GitHub default branch is `main`.
+- Confirm the runtime-safe baseline snapshot points to `main`.
 - Leave temporary reports and Drive artifacts untouched unless they are explicitly in scope.
