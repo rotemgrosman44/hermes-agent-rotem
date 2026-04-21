@@ -219,7 +219,7 @@ class TestAutoVoiceReply:
         return _make_runner(tmp_path)
 
     def _call(self, runner, voice_mode, message_type, agent_messages=None,
-              response="Hello!", in_voice_channel=False):
+              response="Hello!", in_voice_channel=False, text="test"):
         """Call real _should_send_voice_reply on a GatewayRunner instance."""
         chat_id = "123"
         if voice_mode != "off":
@@ -227,7 +227,7 @@ class TestAutoVoiceReply:
         else:
             runner._voice_mode.pop(chat_id, None)
 
-        event = _make_event(message_type=message_type)
+        event = _make_event(text=text, message_type=message_type)
 
         if in_voice_channel:
             mock_adapter = MagicMock()
@@ -277,9 +277,18 @@ class TestAutoVoiceReply:
 
     # -- Text input: only runner handles -----------------------------------
 
-    def test_text_input_all_mode_runner_fires(self, runner):
-        """all + text input: only runner fires (base auto-TTS only for voice)."""
-        assert self._call(runner, "all", MessageType.TEXT) is True
+    def test_text_input_all_mode_without_explicit_request_no_reply(self, runner):
+        """all + text input: no TTS unless the user explicitly asks for voice."""
+        assert self._call(runner, "all", MessageType.TEXT) is False
+
+    def test_text_input_explicit_voice_request_runner_fires(self, runner):
+        """Explicit voice request: runner may generate TTS for text input."""
+        assert self._call(
+            runner,
+            "all",
+            MessageType.TEXT,
+            text="שלח לי הודעה קולית עם התשובה",
+        ) is True
 
     def test_text_input_voice_only_no_reply(self, runner):
         """voice_only + text input: neither fires."""
@@ -321,7 +330,13 @@ class TestAutoVoiceReply:
                 "function": {"name": "text_to_speech", "arguments": "{}"},
             }],
         }]
-        assert self._call(runner, "all", MessageType.TEXT, agent_messages=messages) is False
+        assert self._call(
+            runner,
+            "all",
+            MessageType.TEXT,
+            agent_messages=messages,
+            text="send me a voice message",
+        ) is False
 
     def test_no_dedup_for_other_tools(self, runner):
         messages = [{
@@ -332,7 +347,13 @@ class TestAutoVoiceReply:
                 "function": {"name": "web_search", "arguments": "{}"},
             }],
         }]
-        assert self._call(runner, "all", MessageType.TEXT, agent_messages=messages) is True
+        assert self._call(
+            runner,
+            "all",
+            MessageType.TEXT,
+            agent_messages=messages,
+            text="send me a voice message",
+        ) is True
 
 
 # =====================================================================
@@ -2530,7 +2551,7 @@ class TestVoiceTTSPlayback:
         return runner
 
     def _call_should_reply(self, runner, voice_mode, msg_type, response="Hello",
-                           agent_msgs=None, already_sent=False):
+                           agent_msgs=None, already_sent=False, text="test"):
         from gateway.platforms.base import MessageType, MessageEvent, SessionSource
         from gateway.config import Platform
         runner._voice_mode["ch1"] = voice_mode
@@ -2538,7 +2559,7 @@ class TestVoiceTTSPlayback:
             platform=Platform.DISCORD, chat_id="ch1",
             user_id="1", user_name="test", chat_type="channel",
         )
-        event = MessageEvent(source=source, text="test", message_type=msg_type)
+        event = MessageEvent(source=source, text=text, message_type=msg_type)
         return runner._should_send_voice_reply(
             event, response, agent_msgs or [], already_sent=already_sent,
         )
@@ -2551,11 +2572,23 @@ class TestVoiceTTSPlayback:
         runner = self._make_runner()
         assert self._call_should_reply(runner, "all", MessageType.VOICE, already_sent=False) is False
 
-    def test_text_input_voice_all_runner_fires(self):
-        """Streaming OFF + text input + voice_mode=all: runner generates TTS."""
+    def test_text_input_voice_all_without_explicit_request_no_tts(self):
+        """Streaming OFF + text input + voice_mode=all: no TTS without explicit request."""
         from gateway.platforms.base import MessageType
         runner = self._make_runner()
-        assert self._call_should_reply(runner, "all", MessageType.TEXT, already_sent=False) is True
+        assert self._call_should_reply(runner, "all", MessageType.TEXT, already_sent=False) is False
+
+    def test_text_input_explicit_voice_request_runner_fires(self):
+        """Streaming OFF + explicit request: runner generates TTS."""
+        from gateway.platforms.base import MessageType
+        runner = self._make_runner()
+        assert self._call_should_reply(
+            runner,
+            "all",
+            MessageType.TEXT,
+            already_sent=False,
+            text="send me a voice message",
+        ) is True
 
     def test_text_input_voice_off_no_tts(self):
         """Streaming OFF + text input + voice_mode=off: no TTS."""
@@ -2588,7 +2621,13 @@ class TestVoiceTTSPlayback:
         agent_msgs = [{"role": "assistant", "tool_calls": [
             {"id": "1", "type": "function", "function": {"name": "text_to_speech", "arguments": "{}"}}
         ]}]
-        assert self._call_should_reply(runner, "all", MessageType.TEXT, agent_msgs=agent_msgs) is False
+        assert self._call_should_reply(
+            runner,
+            "all",
+            MessageType.TEXT,
+            agent_msgs=agent_msgs,
+            text="send me a voice message",
+        ) is False
 
     # -- Streaming ON (already_sent=True) --
 

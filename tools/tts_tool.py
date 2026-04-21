@@ -12,8 +12,8 @@ Supports seven TTS providers:
 - DeepDub (Hebrew): DeepDub REST with deterministic Opus conversion
 
 Output formats:
-- Opus (.ogg) for Telegram voice bubbles (requires ffmpeg for Edge TTS)
-- MP3 (.mp3) for everything else (CLI, Discord, WhatsApp)
+- Opus (.ogg) for Telegram/WhatsApp voice bubbles
+- MP3 (.mp3) for everything else (CLI, Discord)
 
 Configuration is loaded from ~/.hermes/config.yaml under the 'tts:' key.
 The user chooses the provider and voice; the model just sends text.
@@ -752,21 +752,29 @@ def text_to_speech_tool(
     provider = _get_provider(tts_config)
 
     # Detect platform from gateway env var to choose the best output format.
-    # Telegram voice bubbles require Opus (.ogg); OpenAI and ElevenLabs can
-    # produce Opus natively (no ffmpeg needed).  Edge TTS always outputs MP3
-    # and needs ffmpeg for conversion.
+    # Telegram and WhatsApp voice bubbles require Opus (.ogg). OpenAI,
+    # ElevenLabs, Mistral, and DeepDub can produce or normalize directly to
+    # Opus when the requested output path ends in .ogg. Edge TTS and a few
+    # other providers output MP3/WAV first and are converted below with ffmpeg.
     from gateway.session_context import get_session_env
     platform = get_session_env("HERMES_SESSION_PLATFORM", "").lower()
-    want_opus = (platform == "telegram")
+    want_opus = platform in ("telegram", "whatsapp")
 
     # Determine output path
     if output_path:
         file_path = Path(output_path).expanduser()
+        if (
+            want_opus
+            and provider in ("openai", "elevenlabs", "mistral", "deepdub")
+            and file_path.suffix.lower() not in (".ogg", ".opus")
+        ):
+            file_path = file_path.with_suffix(".ogg")
     else:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = Path(DEFAULT_OUTPUT_DIR)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # Use .ogg for Telegram with providers that can produce or normalize Opus.
+        # Use .ogg for voice-message platforms with providers that can produce
+        # or normalize Opus directly.
         if want_opus and provider in ("openai", "elevenlabs", "mistral", "deepdub"):
             file_path = out_dir / f"tts_{timestamp}.ogg"
         else:
@@ -870,16 +878,19 @@ def text_to_speech_tool(
                 "error": f"TTS generation produced no output (provider: {provider})"
             }, ensure_ascii=False)
 
-        # Try Opus conversion for Telegram compatibility
-        # Edge TTS outputs MP3, NeuTTS outputs WAV — both need ffmpeg conversion
+        # Try Opus conversion for voice-message compatibility.
+        # WhatsApp voice notes also need Ogg/Opus; MP3 is delivered as a
+        # regular audio attachment and is easy to miss in group chats.
         voice_compatible = False
-        if provider in ("edge", "neutts", "minimax", "xai") and not file_str.endswith(".ogg"):
+        if file_str.endswith((".ogg", ".opus")):
+            voice_compatible = True
+        elif want_opus or provider in ("edge", "neutts", "minimax", "xai"):
             opus_path = _convert_to_opus(file_str)
             if opus_path:
                 file_str = opus_path
                 voice_compatible = True
         elif provider in ("elevenlabs", "openai", "mistral", "deepdub"):
-            voice_compatible = file_str.endswith(".ogg")
+            voice_compatible = False
 
         file_size = os.path.getsize(file_str)
         logger.info("TTS audio saved: %s (%s bytes, provider: %s)", file_str, f"{file_size:,}", provider)
@@ -1267,7 +1278,7 @@ from tools.registry import registry, tool_error
 
 TTS_SCHEMA = {
     "name": "text_to_speech",
-    "description": "Convert text to speech audio. Returns a MEDIA: path that the platform delivers as a voice message. On Telegram it plays as a voice bubble, on Discord/WhatsApp as an audio attachment. In CLI mode, saves to ~/voice-memos/. Voice and provider are user-configured, not model-selected.",
+    "description": "Convert text to speech audio only when the user explicitly asks for a voice/audio message (for example: 'send me a voice note', 'תקליט', 'שלח הודעה קולית'). Returns a MEDIA: path that the platform delivers as a voice message. On Telegram/WhatsApp it plays as a voice bubble, on Discord as an audio attachment. In CLI mode, saves to ~/voice-memos/. Voice and provider are user-configured, not model-selected.",
     "parameters": {
         "type": "object",
         "properties": {

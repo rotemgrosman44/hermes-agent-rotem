@@ -22,6 +22,7 @@ import os
 import platform
 import re
 import subprocess
+from collections.abc import Mapping
 
 _IS_WINDOWS = platform.system() == "Windows"
 from pathlib import Path
@@ -163,6 +164,122 @@ class WhatsAppAdapter(BasePlatformAdapter):
             return {str(part).strip() for part in raw if str(part).strip()}
         return {part.strip() for part in str(raw).split(",") if part.strip()}
 
+    @staticmethod
+    def _normalize_whatsapp_user_identifier(value: Optional[str]) -> str:
+        return (
+            str(value or "")
+            .strip()
+            .replace("+", "", 1)
+            .split(":", 1)[0]
+            .split("@", 1)[0]
+        )
+
+    @staticmethod
+    def _parse_user_list(value: Any) -> set[str]:
+        if value is None:
+            return set()
+        if isinstance(value, (list, tuple, set)):
+            raw_parts = value
+        else:
+            raw_parts = str(value).split(",")
+        return {
+            WhatsAppAdapter._normalize_whatsapp_user_identifier(part)
+            for part in raw_parts
+            if WhatsAppAdapter._normalize_whatsapp_user_identifier(part)
+        }
+
+    def _whatsapp_session_path_for_aliases(self) -> Path:
+        path = getattr(self, "_session_path", None)
+        if path:
+            return Path(path)
+        configured = getattr(getattr(self, "config", None), "extra", {}).get("session_path")
+        if configured:
+            return Path(configured)
+        return Path(get_hermes_dir("platforms/whatsapp/session", "whatsapp/session"))
+
+    def _expand_whatsapp_user_identifiers(self, value: Any) -> set[str]:
+        normalized = self._normalize_whatsapp_user_identifier(value)
+        if not normalized:
+            return set()
+
+        session_path = self._whatsapp_session_path_for_aliases()
+        resolved: set[str] = set()
+        queue = [normalized]
+
+        while queue:
+            current = queue.pop(0)
+            if not current or current in resolved:
+                continue
+
+            resolved.add(current)
+            for suffix in ("", "_reverse"):
+                mapping_path = session_path / f"lid-mapping-{current}{suffix}.json"
+                if not mapping_path.exists():
+                    continue
+                try:
+                    mapped = self._normalize_whatsapp_user_identifier(
+                        json.loads(mapping_path.read_text(encoding="utf-8"))
+                    )
+                except Exception:
+                    continue
+                if mapped and mapped not in resolved:
+                    queue.append(mapped)
+
+        return resolved
+
+    def _whatsapp_free_response_group_users(self) -> dict[str, set[str]]:
+        raw = self.config.extra.get("free_response_group_users")
+        if raw is None:
+            raw = os.getenv("WHATSAPP_FREE_RESPONSE_GROUP_USERS", "")
+
+        if not raw:
+            return {}
+
+        parsed: Any = raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = {}
+                for entry in raw.split(";"):
+                    if ":" not in entry:
+                        continue
+                    chat_id, users = entry.split(":", 1)
+                    chat_id = chat_id.strip()
+                    if chat_id:
+                        parsed[chat_id] = users
+
+        if not isinstance(parsed, Mapping):
+            logger.warning(
+                "[%s] whatsapp free_response_group_users must be a mapping; got %s",
+                self.name,
+                type(parsed).__name__,
+            )
+            return {}
+
+        result: dict[str, set[str]] = {}
+        for chat_id, users in parsed.items():
+            normalized_chat = str(chat_id).strip()
+            normalized_users: set[str] = set()
+            for user in self._parse_user_list(users):
+                normalized_users.update(self._expand_whatsapp_user_identifiers(user))
+            if normalized_chat and normalized_users:
+                result[normalized_chat] = normalized_users
+        return result
+
+    def _message_sender_has_group_free_response(self, data: Dict[str, Any]) -> bool:
+        chat_id = str(data.get("chatId") or "").strip()
+        sender_id = self._normalize_whatsapp_user_identifier(data.get("senderId"))
+        if not chat_id or not sender_id:
+            return False
+
+        free_users_by_group = self._whatsapp_free_response_group_users()
+        allowed_users = set(free_users_by_group.get(chat_id, set()))
+        allowed_users.update(free_users_by_group.get("*", set()))
+        return "*" in allowed_users or bool(
+            self._expand_whatsapp_user_identifiers(sender_id) & allowed_users
+        )
+
     def _compile_mention_patterns(self):
         patterns = self.config.extra.get("mention_patterns")
         if patterns is None:
@@ -259,6 +376,8 @@ class WhatsAppAdapter(BasePlatformAdapter):
             return True
         chat_id = str(data.get("chatId") or "")
         if chat_id in self._whatsapp_free_response_chats():
+            return True
+        if self._message_sender_has_group_free_response(data):
             return True
         if not self._whatsapp_require_mention():
             return True

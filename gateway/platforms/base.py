@@ -720,6 +720,40 @@ class MessageEvent:
         return parts[1] if len(parts) > 1 else ""
 
 
+_OUTBOUND_VOICE_NEGATIVE_PATTERNS = (
+    r"\b(?:do not|don't|dont|no)\s+(?:send|reply|respond|record).{0,32}\b(?:voice|audio)\b",
+    r"\btext\s+only\b",
+    r"בלי\s+(?:קול|הודעה\s+קולית)",
+    r"טקסט\s+בלבד",
+    r"אל\s+(?:תשלח|תשלחי|תשלחו|תקליט|תקליטי|תקליטו).{0,24}(?:קול|קולית|הודעה\s+קולית)",
+    r"לא\s+(?:לשלוח|תשלח|תשלחי|תשלחו|להקליט|תקליט|תקליטי|תקליטו).{0,24}(?:קול|קולית|הודעה\s+קולית)",
+)
+
+_OUTBOUND_VOICE_REQUEST_PATTERNS = (
+    r"\b(?:send|record|reply|respond).{0,32}\b(?:voice|audio)\b",
+    r"\b(?:voice|audio)\s+(?:message|note|reply)\b",
+    r"(?:שלח|שלחי|שלחו|תשלח|תשלחי|תשלחו)\s*(?:לי|לנו)?\s*הודעה\s+קולית",
+    r"(?:הקלט|הקליטי|הקליטו|תקליט|תקליטי|תקליטו)\s*(?:לי|לנו|מחדש)?",
+    r"(?:ענה|תענה|תגיב|השב|תשיב)\s+בקול",
+    r"ב(?:הודעה\s+)?קולית",
+)
+
+
+def text_requests_outbound_voice(text: str) -> bool:
+    """Return True only when the user explicitly asked for a voice reply."""
+    normalized = re.sub(r"\s+", " ", str(text or "").lower()).strip()
+    if not normalized:
+        return False
+    if any(re.search(pattern, normalized) for pattern in _OUTBOUND_VOICE_NEGATIVE_PATTERNS):
+        return False
+    return any(re.search(pattern, normalized) for pattern in _OUTBOUND_VOICE_REQUEST_PATTERNS)
+
+
+def event_requests_outbound_voice(event: MessageEvent) -> bool:
+    """Check the current inbound event for explicit outbound voice consent."""
+    return text_requests_outbound_voice(getattr(event, "text", "") or "")
+
+
 @dataclass 
 class SendResult:
     """Result of sending a message."""
@@ -1729,14 +1763,16 @@ class BasePlatformAdapter(ABC):
                 if local_files:
                     logger.info("[%s] extract_local_files found %d file(s) in response", self.name, len(local_files))
                 
-                # Auto-TTS: if voice message, generate audio FIRST (before sending text)
-                # Skipped when the chat has voice mode disabled (/voice off)
+                # Auto-TTS is opt-in only. Dictated/voice input still receives
+                # text unless the user's latest message explicitly asked for a
+                # voice note ("send a voice message", "תקליט", etc.).
                 _tts_path = None
                 suppress_text_for_audio = False
+                voice_requested = event_requests_outbound_voice(event)
                 if (event.message_type == MessageType.VOICE
                         and text_content
                         and not media_files
-                        and event.source.chat_id not in self._auto_tts_disabled_chats):
+                        and voice_requested):
                     try:
                         from tools.tts_tool import (
                             check_tts_requirements,
@@ -1781,7 +1817,7 @@ class BasePlatformAdapter(ABC):
 
                 if media_files:
                     audio_only_media = all(Path(media_path).suffix.lower() in _AUDIO_EXTS for media_path, _ in media_files)
-                    if audio_only_media:
+                    if audio_only_media and voice_requested:
                         suppress_text_for_audio = True
 
                 # Send the text portion
@@ -1841,6 +1877,13 @@ class BasePlatformAdapter(ABC):
                     try:
                         ext = Path(media_path).suffix.lower()
                         if ext in _AUDIO_EXTS:
+                            if not voice_requested:
+                                logger.info(
+                                    "[%s] Blocked outbound audio media without explicit voice request: %s",
+                                    self.name,
+                                    media_path,
+                                )
+                                continue
                             media_result = await self.send_voice(
                                 chat_id=event.source.chat_id,
                                 audio_path=media_path,

@@ -550,6 +550,8 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["require_mention"] = platform_cfg["require_mention"]
                 if "free_response_channels" in platform_cfg:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
+                if plat == Platform.WHATSAPP and "free_response_group_users" in platform_cfg:
+                    bridged["free_response_group_users"] = platform_cfg["free_response_group_users"]
                 if "mention_patterns" in platform_cfg:
                     bridged["mention_patterns"] = platform_cfg["mention_patterns"]
                 if plat == Platform.DISCORD and "channel_skill_bindings" in platform_cfg:
@@ -662,6 +664,9 @@ def load_gateway_config() -> GatewayConfig:
                     if isinstance(frc, list):
                         frc = ",".join(str(v) for v in frc)
                     os.environ["WHATSAPP_FREE_RESPONSE_CHATS"] = str(frc)
+                frgu = whatsapp_cfg.get("free_response_group_users")
+                if frgu is not None and not os.getenv("WHATSAPP_FREE_RESPONSE_GROUP_USERS"):
+                    os.environ["WHATSAPP_FREE_RESPONSE_GROUP_USERS"] = json.dumps(frgu)
 
             # Matrix settings → env vars (env vars take precedence)
             matrix_cfg = yaml_cfg.get("matrix", {})

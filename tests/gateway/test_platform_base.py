@@ -8,7 +8,9 @@ from gateway.platforms.base import (
     GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE,
     MessageEvent,
     MessageType,
+    event_requests_outbound_voice,
     safe_url_for_log,
+    text_requests_outbound_voice,
     utf16_len,
     _prefix_within_utf16_limit,
 )
@@ -115,6 +117,26 @@ class TestMessageEventGetCommandArgs:
     def test_not_a_command_returns_full_text(self):
         event = MessageEvent(text="hello world")
         assert event.get_command_args() == "hello world"
+
+
+class TestOutboundVoiceRequest:
+    def test_hebrew_explicit_voice_requests(self):
+        assert text_requests_outbound_voice("שלח לי הודעה קולית")
+        assert text_requests_outbound_voice("תקליט לנו בהודעה קולית את הבדיחה")
+        assert text_requests_outbound_voice("לא עבד. תקליט מחדש")
+
+    def test_dictation_or_voice_mentions_do_not_request_voice_reply(self):
+        assert not text_requests_outbound_voice("[audio received]")
+        assert not text_requests_outbound_voice("שלח לי הודעה קצרה שאוכל להעתיק")
+        assert not text_requests_outbound_voice("הודעת קול לא עבדה קודם")
+
+    def test_negative_voice_request_blocks(self):
+        assert not text_requests_outbound_voice("טקסט בלבד, בלי הודעה קולית")
+        assert not text_requests_outbound_voice("don't send a voice message, text only")
+
+    def test_event_wrapper_uses_event_text(self):
+        event = MessageEvent(text="send me a voice note")
+        assert event_requests_outbound_voice(event)
 
 
 # ---------------------------------------------------------------------------
@@ -581,4 +603,3 @@ class TestTruncateMessageUtf16:
             assert fence_count % 2 == 0, (
                 f"Chunk {i} has unbalanced fences ({fence_count})"
             )
-
