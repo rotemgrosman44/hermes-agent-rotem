@@ -253,7 +253,7 @@ export default function App() {
                 gridTemplateColumns: `auto repeat(${navItems.length}, auto)`,
               }}
             >
-              <Cell className="flex items-center !p-0 !px-3 sm:!px-5">
+              <Cell className="flex items-center !p-0 !px-2.5 sm:!px-3">
                 <Typography
                   className="font-bold text-[1.0625rem] sm:text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
                   style={{ mixBlendMode: "plus-lighter" }}
@@ -271,9 +271,9 @@ export default function App() {
                     end={path === "/"}
                     className={({ isActive }) =>
                       cn(
-                        "group relative flex h-full min-w-max w-full items-center gap-1.5",
-                        "px-2.5 sm:px-4 py-2",
-                        "font-mondwest text-[0.65rem] sm:text-[0.8rem] tracking-[0.12em]",
+                        "group relative flex h-full min-w-max w-full items-center gap-1",
+                        "px-2 sm:px-2.5 py-2",
+                        "font-mondwest text-[0.65rem] sm:text-[0.72rem] tracking-[0.08em]",
                         "whitespace-nowrap transition-colors cursor-pointer",
                         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
                         isActive
@@ -287,7 +287,7 @@ export default function App() {
                   >
                     {({ isActive }) => (
                       <>
-                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                        <Icon className="h-3 w-3 shrink-0" />
                         <span className="hidden sm:inline">
                           {labelKey
                             ? ((t.app.nav as Record<string, string>)[
