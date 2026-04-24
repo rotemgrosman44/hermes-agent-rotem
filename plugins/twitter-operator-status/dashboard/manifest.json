@@ -1,0 +1,13 @@
+{
+  "name": "twitter-operator-status",
+  "label": "Twitter Operator",
+  "description": "Read-only status for Rotem's isolated Telegram/X operator runtime",
+  "icon": "RadioTower",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/twitter-operator",
+    "position": "after:cron"
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

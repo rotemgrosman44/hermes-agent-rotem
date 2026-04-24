@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   Eye,
   EyeOff,
@@ -15,7 +15,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { EnvStateResponse, EnvVarInfo } from "@/lib/api";
+import type { EnvVarInfo } from "@/lib/api";
 import { useToast } from "@/hooks/useToast";
 import { Toast } from "@/components/Toast";
 import { OAuthProvidersCard } from "@/components/OAuthProvidersCard";
@@ -354,7 +354,7 @@ function ProviderGroupCard({
 /* ------------------------------------------------------------------ */
 
 export default function EnvPage() {
-  const [envState, setEnvState] = useState<EnvStateResponse | null>(null);
+  const [vars, setVars] = useState<Record<string, EnvVarInfo> | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
@@ -362,27 +362,9 @@ export default function EnvPage() {
   const { toast, showToast } = useToast();
   const { t } = useI18n();
 
-  const loadEnvState = useCallback(() => {
-    api.getEnvState().then(setEnvState).catch(() => {});
-  }, []);
-
   useEffect(() => {
-    const handleFocus = () => loadEnvState();
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") loadEnvState();
-    };
-
-    loadEnvState();
-    window.addEventListener("focus", handleFocus);
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      window.removeEventListener("focus", handleFocus);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [loadEnvState]);
-
-  const vars = envState?.vars ?? null;
+    api.getEnvVars().then(setVars).catch(() => {});
+  }, []);
 
   const handleSave = async (key: string) => {
     const value = edits[key];
@@ -390,18 +372,11 @@ export default function EnvPage() {
     setSaving(key);
     try {
       await api.setEnvVar(key, value);
-      setEnvState((prev) =>
+      setVars((prev) =>
         prev
           ? {
               ...prev,
-              vars: {
-                ...prev.vars,
-                [key]: {
-                  ...prev.vars[key],
-                  is_set: true,
-                  redacted_value: value.slice(0, 4) + "..." + value.slice(-4),
-                },
-              },
+              [key]: { ...prev[key], is_set: true, redacted_value: value.slice(0, 4) + "..." + value.slice(-4) },
             }
           : prev,
       );
@@ -419,15 +394,9 @@ export default function EnvPage() {
     setSaving(key);
     try {
       await api.deleteEnvVar(key);
-      setEnvState((prev) =>
+      setVars((prev) =>
         prev
-          ? {
-              ...prev,
-              vars: {
-                ...prev.vars,
-                [key]: { ...prev.vars[key], is_set: false, redacted_value: null },
-              },
-            }
+          ? { ...prev, [key]: { ...prev[key], is_set: false, redacted_value: null } }
           : prev,
       );
       setEdits((prev) => { const n = { ...prev }; delete n[key]; return n; });
@@ -508,7 +477,7 @@ export default function EnvPage() {
     return { providerGroups: groups, nonProviderGrouped: nonProvider };
   }, [vars, showAdvanced, t]);
 
-  if (!envState) {
+  if (!vars) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -525,14 +494,8 @@ export default function EnvPage() {
 
       <div className="flex items-center justify-between">
         <div className="flex flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2 text-[0.7rem] text-muted-foreground/80">
-            <Badge variant="secondary">
-              {envState.scope === "current_runtime" ? "Current runtime" : envState.scope}
-            </Badge>
-            <code>{envState.runtime_home}</code>
-          </div>
           <p className="text-sm text-muted-foreground">
-            {t.env.description} <code>{envState.env_path}</code>
+            {t.env.description} <code>~/.hermes/.env</code>
           </p>
           <p className="text-[0.7rem] text-muted-foreground/70">
             {t.env.changesNote}

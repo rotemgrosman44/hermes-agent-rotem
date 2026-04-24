@@ -10,13 +10,13 @@ Usage:
 """
 
 import asyncio
-import base64
 import hmac
 import importlib.util
 import json
 import logging
 import os
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -57,10 +57,10 @@ try:
 except ImportError:
     raise SystemExit(
         "Web UI requires fastapi and uvicorn.\n"
-        "Run 'hermes web' to auto-install, or: pip install hermes-agent[web]"
+        f"Install with: {sys.executable} -m pip install 'fastapi' 'uvicorn[standard]'"
     )
 
-WEB_DIST = Path(__file__).parent / "web_dist"
+WEB_DIST = Path(os.environ["HERMES_WEB_DIST"]) if "HERMES_WEB_DIST" in os.environ else Path(__file__).parent / "web_dist"
 _log = logging.getLogger(__name__)
 
 app = FastAPI(title="Hermes Agent", version=__version__)
@@ -71,6 +71,7 @@ app = FastAPI(title="Hermes Agent", version=__version__)
 # Injected into the SPA HTML so only the legitimate web UI can use it.
 # ---------------------------------------------------------------------------
 _SESSION_TOKEN = secrets.token_urlsafe(32)
+_SESSION_HEADER_NAME = "X-Hermes-Session-Token"
 
 # Simple rate limiter for the reveal endpoint
 _reveal_timestamps: List[float] = []
@@ -104,15 +105,115 @@ _PUBLIC_API_PATHS: frozenset = frozenset({
 })
 
 
-def _require_token(request: Request) -> None:
-    """Validate the ephemeral session token.  Raises 401 on mismatch.
+def _has_valid_session_token(request: Request) -> bool:
+    """True if the request carries a valid dashboard session token.
 
-    Uses ``hmac.compare_digest`` to prevent timing side-channels.
+    The dedicated session header avoids collisions with reverse proxies that
+    already use ``Authorization`` (for example Caddy ``basic_auth``). We still
+    accept the legacy Bearer path for backward compatibility with older
+    dashboard bundles.
     """
+    session_header = request.headers.get(_SESSION_HEADER_NAME, "")
+    if session_header and hmac.compare_digest(
+        session_header.encode(),
+        _SESSION_TOKEN.encode(),
+    ):
+        return True
+
     auth = request.headers.get("authorization", "")
     expected = f"Bearer {_SESSION_TOKEN}"
-    if not hmac.compare_digest(auth.encode(), expected.encode()):
+    return hmac.compare_digest(auth.encode(), expected.encode())
+
+
+def _require_token(request: Request) -> None:
+    """Validate the ephemeral session token.  Raises 401 on mismatch."""
+    if not _has_valid_session_token(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# Accepted Host header values for loopback binds. DNS rebinding attacks
+# point a victim browser at an attacker-controlled hostname (evil.test)
+# which resolves to 127.0.0.1 after a TTL flip — bypassing same-origin
+# checks because the browser now considers evil.test and our dashboard
+# "same origin". Validating the Host header at the app layer rejects any
+# request whose Host isn't one we bound for. See GHSA-ppp5-vxwm-4cf7.
+_LOOPBACK_HOST_VALUES: frozenset = frozenset({
+    "localhost", "127.0.0.1", "::1",
+})
+
+
+def _is_accepted_host(host_header: str, bound_host: str) -> bool:
+    """True if the Host header targets the interface we bound to.
+
+    Accepts:
+    - Exact bound host (with or without port suffix)
+    - Loopback aliases when bound to loopback
+    - Any host when bound to 0.0.0.0 (explicit opt-in to non-loopback,
+      no protection possible at this layer)
+    """
+    if not host_header:
+        return False
+    # Strip port suffix. IPv6 addresses use bracket notation:
+    #   [::1]         — no port
+    #   [::1]:9119    — with port
+    # Plain hosts/v4:
+    #   localhost:9119
+    #   127.0.0.1:9119
+    h = host_header.strip()
+    if h.startswith("["):
+        # IPv6 bracketed — port (if any) follows "]:"
+        close = h.find("]")
+        if close != -1:
+            host_only = h[1:close]  # strip brackets
+        else:
+            host_only = h.strip("[]")
+    else:
+        host_only = h.rsplit(":", 1)[0] if ":" in h else h
+    host_only = host_only.lower()
+
+    # 0.0.0.0 bind means operator explicitly opted into all-interfaces
+    # (requires --insecure per web_server.start_server). No Host-layer
+    # defence can protect that mode; rely on operator network controls.
+    if bound_host in ("0.0.0.0", "::"):
+        return True
+
+    # Loopback bind: accept the loopback names
+    bound_lc = bound_host.lower()
+    if bound_lc in _LOOPBACK_HOST_VALUES:
+        return host_only in _LOOPBACK_HOST_VALUES
+
+    # Explicit non-loopback bind: require exact host match
+    return host_only == bound_lc
+
+
+@app.middleware("http")
+async def host_header_middleware(request: Request, call_next):
+    """Reject requests whose Host header doesn't match the bound interface.
+
+    Defends against DNS rebinding: a victim browser on a localhost
+    dashboard is tricked into fetching from an attacker hostname that
+    TTL-flips to 127.0.0.1. CORS and same-origin checks don't help —
+    the browser now treats the attacker origin as same-origin with the
+    dashboard. Host-header validation at the app layer catches it.
+
+    See GHSA-ppp5-vxwm-4cf7.
+    """
+    # Store the bound host on app.state so this middleware can read it —
+    # set by start_server() at listen time.
+    bound_host = getattr(app.state, "bound_host", None)
+    if bound_host:
+        host_header = request.headers.get("host", "")
+        if not _is_accepted_host(host_header, bound_host):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": (
+                        "Invalid Host header. Dashboard requests must use "
+                        "the hostname the server was bound to."
+                    ),
+                },
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -120,629 +221,12 @@ async def auth_middleware(request: Request, call_next):
     """Require the session token on all /api/ routes except the public list."""
     path = request.url.path
     if path.startswith("/api/") and path not in _PUBLIC_API_PATHS and not path.startswith("/api/plugins/"):
-        auth = request.headers.get("authorization", "")
-        expected = f"Bearer {_SESSION_TOKEN}"
-        if not hmac.compare_digest(auth.encode(), expected.encode()):
+        if not _has_valid_session_token(request):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Unauthorized"},
             )
     return await call_next(request)
-
-
-def _load_runtime_status_for(home: Path) -> Dict[str, Any]:
-    """Read ``gateway_state.json`` for an arbitrary Hermes runtime home."""
-    try:
-        path = home / "gateway_state.json"
-        if not path.exists():
-            return {}
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _iter_session_runtime_homes() -> List[Path]:
-    """Return the current runtime plus any other live sibling runtimes.
-
-    The web dashboard process itself is still scoped to one ``HERMES_HOME``
-    for config/env editing, but the sessions page should reflect the user's
-    live messaging surface.  We therefore aggregate:
-    - the current dashboard runtime
-    - live profile runtimes under ``~/.hermes/profiles/*``
-    - live sibling runtimes such as ``~/.hermes-twitter-operator``
-
-    Non-current runtimes are included only when their persisted gateway state
-    says ``running`` to avoid surfacing stale historical homes like the old
-    default runtime after a cutover.
-    """
-    current = get_hermes_home().resolve()
-    home_root = Path.home()
-    default_home = (home_root / ".hermes").resolve()
-
-    candidates: List[Path] = [current]
-    if default_home.exists():
-        candidates.append(default_home)
-        profiles_dir = default_home / "profiles"
-        if profiles_dir.exists():
-            candidates.extend(
-                path.resolve()
-                for path in profiles_dir.iterdir()
-                if path.is_dir()
-            )
-    candidates.extend(
-        path.resolve()
-        for path in home_root.glob(".hermes-*")
-        if path.is_dir()
-    )
-
-    homes: List[Path] = []
-    seen: set[str] = set()
-    for home in candidates:
-        home_key = str(home)
-        if home_key in seen:
-            continue
-        seen.add(home_key)
-        if not (home / "state.db").exists():
-            continue
-        if home == current:
-            homes.append(home)
-            continue
-        status = _load_runtime_status_for(home)
-        if status.get("gateway_state") == "running":
-            homes.append(home)
-    return homes
-
-
-def _runtime_label_for(home: Path) -> str:
-    current = get_hermes_home().resolve()
-    if home == current:
-        return "main"
-    if home.parent.name == "profiles":
-        return home.name
-    name = home.name.lstrip(".")
-    return name or "runtime"
-
-
-def _runtime_ref(home: Path) -> Dict[str, str]:
-    return {
-        "label": _runtime_label_for(home),
-        "home": str(home.resolve()),
-    }
-
-
-def _dashboard_scope_meta(scope: str) -> Dict[str, Any]:
-    return {
-        "scope": scope,
-        "runtime_home": str(get_hermes_home().resolve()),
-    }
-
-
-def _read_json_file(path: Path) -> Dict[str, Any]:
-    try:
-        if not path.exists():
-            return {}
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _first_nonempty_line(path: Path) -> str:
-    try:
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if line:
-                return line
-    except Exception:
-        pass
-    return ""
-
-
-def _load_channel_entries(home: Path, platform: str) -> List[Dict[str, Any]]:
-    data = _read_json_file(home / "channel_directory.json")
-    return list(data.get("platforms", {}).get(platform, []) or [])
-
-
-def _platform_state(home: Path, platform: str) -> Dict[str, Any]:
-    status = _load_runtime_status_for(home)
-    return dict(status.get("platforms", {}).get(platform, {}) or {})
-
-
-def _surface_identity_label(home: Path, fallback: str) -> str:
-    first_line = _first_nonempty_line(home / "SOUL.md")
-    if first_line.lower().startswith("you are "):
-        return first_line[8:].rstrip(".")
-    return first_line or fallback
-
-
-def _display_channel(entry: Dict[str, Any]) -> str:
-    name = (entry.get("name") or "").strip()
-    channel_id = (entry.get("id") or "").strip()
-    if name and channel_id:
-        return f"{name} ({channel_id})"
-    return name or channel_id or "unknown"
-
-
-def _portal_reachable(url: Optional[str]) -> Optional[bool]:
-    if not url:
-        return None
-    try:
-        parsed = urllib.parse.urlparse(url)
-        if parsed.hostname not in {"127.0.0.1", "localhost"}:
-            return None
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=0.6) as response:
-            return 200 <= int(response.status) < 500
-    except Exception:
-        return False
-
-
-def _human_state_for(
-    *,
-    scope: str,
-    connection_state: str,
-    onboarding_commands: List[str],
-) -> str:
-    if scope == "external_portal":
-        return "External"
-    if connection_state in {"connected", "running"}:
-        return "Running"
-    if onboarding_commands:
-        return "Needs Rotem"
-    return "Blocked"
-
-
-def _surface_quick_panel(current_home: Path, operator_home: Path) -> Dict[str, Any]:
-    return {
-        "title": "Quick Actions",
-        "title_he": "פעולות חשובות",
-        "sections": [
-            {
-                "id": "main-checks",
-                "title": "Main checks",
-                "title_he": "בדיקות ל-main",
-                "items": [
-                    {
-                        "id": "main-status",
-                        "kind": "command",
-                        "label": "Status main service",
-                        "label_he": "בדוק את שירות ה-main",
-                        "value": "systemctl --user status hermes-gateway-madhatter.service --no-pager",
-                        "note": "Use this first when the WhatsApp lane looks wrong.",
-                    },
-                    {
-                        "id": "main-restart",
-                        "kind": "command",
-                        "label": "Restart main service",
-                        "label_he": "הפעל מחדש את שירות ה-main",
-                        "value": "systemctl --user restart hermes-gateway-madhatter.service",
-                        "note": "Safe restart for Hermes main on the laptop.",
-                    },
-                    {
-                        "id": "main-whatsapp",
-                        "kind": "command",
-                        "label": "WhatsApp re-pair",
-                        "label_he": "זיווג מחדש ל-WhatsApp",
-                        "value": "HERMES_HOME=/home/rotemg/.hermes/profiles/madhatter hermes whatsapp",
-                        "note": "Use only when WhatsApp pairing or session state is broken.",
-                    },
-                ],
-            },
-            {
-                "id": "operator-checks",
-                "title": "Operator checks",
-                "title_he": "בדיקות לאופרטור",
-                "items": [
-                    {
-                        "id": "operator-status",
-                        "kind": "command",
-                        "label": "Status operator service",
-                        "label_he": "בדוק את שירות האופרטור",
-                        "value": "systemctl --user status hermes-twitter-operator-gateway.service --no-pager",
-                        "note": "Read this first when the Telegram or X lane looks stuck.",
-                    },
-                    {
-                        "id": "operator-stop",
-                        "kind": "command",
-                        "label": "Stop operator service",
-                        "label_he": "עצור את שירות האופרטור",
-                        "value": "systemctl --user stop hermes-twitter-operator-gateway.service",
-                        "note": "Fast emergency stop for the Twitter operator lane.",
-                    },
-                    {
-                        "id": "operator-restart",
-                        "kind": "command",
-                        "label": "Restart operator service",
-                        "label_he": "הפעל מחדש את שירות האופרטור",
-                        "value": "systemctl --user restart hermes-twitter-operator-gateway.service",
-                        "note": "Use after a stop or after local fixes.",
-                    },
-                    {
-                        "id": "operator-setup",
-                        "kind": "command",
-                        "label": "Telegram setup",
-                        "label_he": "הגדרת Telegram",
-                        "value": "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes gateway setup",
-                        "note": "Canonical onboarding command for the Telegram control surface.",
-                    },
-                    {
-                        "id": "operator-pairing-list",
-                        "kind": "command",
-                        "label": "Pairing list",
-                        "label_he": "רשימת pairing",
-                        "value": "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing list",
-                        "note": "Shows pending Telegram pairing codes.",
-                    },
-                    {
-                        "id": "operator-pairing-approve",
-                        "kind": "command",
-                        "label": "Pairing approve",
-                        "label_he": "אשר pairing",
-                        "value": "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing approve telegram <CODE>",
-                        "note": "Approve a Telegram pairing code after verification.",
-                    },
-                ],
-            },
-            {
-                "id": "logs-checks",
-                "title": "Logs",
-                "title_he": "בדיקות",
-                "items": [
-                    {
-                        "id": "main-logs",
-                        "kind": "command",
-                        "label": "Main logs",
-                        "label_he": "לוגים של main",
-                        "value": "journalctl --user -u hermes-gateway-madhatter.service -n 80 --no-pager",
-                        "note": "Use when the WhatsApp lane looks active but behaves strangely.",
-                    },
-                    {
-                        "id": "operator-logs",
-                        "kind": "command",
-                        "label": "Operator logs",
-                        "label_he": "לוגים של האופרטור",
-                        "value": "journalctl --user -u hermes-twitter-operator-gateway.service -n 80 --no-pager",
-                        "note": "Use for blocked interval runs, pairing issues, or publish failures.",
-                    },
-                ],
-            },
-            {
-                "id": "jarvis-laptop-access",
-                "title": "Jarvis laptop access",
-                "title_he": "גישה לג'רוויס מהלפטופ",
-                "items": [
-                    {
-                        "id": "jarvis-webui-launcher",
-                        "kind": "path",
-                        "label": "Jarvis Web UI button",
-                        "label_he": "כפתור 06 לפתיחת Jarvis",
-                        "value": r"C:\Users\user\Desktop\HERMES ONBOARD\06 Jarvis MAIN Web UI (Laptop).cmd",
-                        "note": "Open this first. It creates the WSL-backed SSH tunnel and then opens Jarvis in the laptop browser. Keep its terminal open.",
-                    },
-                    {
-                        "id": "jarvis-ssh-launcher",
-                        "kind": "path",
-                        "label": "Jarvis SSH fallback",
-                        "label_he": "כפתור 07 לחיבור SSH למאק",
-                        "value": r"C:\Users\user\Desktop\HERMES ONBOARD\07 Jarvis MAIN SSH (Mac).cmd",
-                        "note": "Use this when the Web UI button cannot open. It does not run recovery commands automatically.",
-                    },
-                    {
-                        "id": "jarvis-main-url",
-                        "kind": "path",
-                        "label": "Jarvis MAIN URL after tunnel",
-                        "label_he": "קישור Jarvis MAIN אחרי tunnel",
-                        "value": "http://127.0.0.1:19101/chat?session=agent%3Amain%3Amain",
-                        "note": "This link is valid from the laptop only while button 06 keeps the SSH tunnel alive.",
-                    },
-                ],
-            },
-            {
-                "id": "recursive-loop",
-                "title": "Recursive loop",
-                "title_he": "לולאת שיפור",
-                "items": [
-                    {
-                        "id": "interval-reports",
-                        "kind": "path",
-                        "label": "Interval reports",
-                        "label_he": "דוחות אינטרוולים",
-                        "value": str(operator_home / "reports" / "intervals"),
-                        "note": "Read the latest operator round reports here.",
-                    },
-                    {
-                        "id": "cron-output",
-                        "kind": "path",
-                        "label": "Cron output",
-                        "label_he": "פלטי cron",
-                        "value": str(operator_home / "cron" / "output"),
-                        "note": "Use this when checking what happened in scheduled runs.",
-                    },
-                    {
-                        "id": "gate-scorecard",
-                        "kind": "path",
-                        "label": "Gate scorecard",
-                        "label_he": "ציון שערים",
-                        "value": str(operator_home / "state" / "twitter_gate_scorecard.json"),
-                        "note": "Canonical local scorecard for Gate A/B/C health.",
-                    },
-                ],
-            },
-            {
-                "id": "mac-coordination",
-                "title": "Mac coordination",
-                "title_he": "תיאום מול המאק",
-                "items": [
-                    {
-                        "id": "mac-query-pack",
-                        "kind": "path",
-                        "label": "Collegial diagnostic query",
-                        "label_he": "שאליתא קולגיאלית",
-                        "value": "/home/rotemg/.hermes/control/runbooks/jarvis-codex-collegial-diagnostic-query-2026-04-17.md",
-                        "note": "Use through the bridge only. Do not write into jarvis-canon from the laptop.",
-                    },
-                    {
-                        "id": "mac-activation-pack",
-                        "kind": "path",
-                        "label": "Short activation prompt",
-                        "label_he": "פרומפט הפעלה קצר",
-                        "value": "/home/rotemg/.hermes/control/runbooks/jarvis-codex-short-activation-prompt-2026-04-17.md",
-                        "note": "This prompt asks Codex/Jarvis on the Mac to validate the shared wiki model before any architecture change.",
-                    },
-                ],
-            },
-        ],
-    }
-
-
-def _jarvis_main_surface() -> Dict[str, Any]:
-    status_path = Path("/home/rotemg/work/jarvis-canon/STATUS.md")
-    launch_script = Path("/home/rotemg/work/jarvis-canon/scripts/jarvis-webui-open.sh")
-    portal_url = "http://127.0.0.1:19101/chat?session=agent%3Amain%3Amain"
-    return {
-        "id": "jarvis-main",
-        "label": "Jarvis MAIN",
-        "visual_label": "Jarvis MAIN / External Portal",
-        "visual_label_he": "ג'רוויס מיין / פורטל חיצוני",
-        "visual_role": "External",
-        "scope": "external_portal",
-        "identity": "Jarvis OpenClaw main session",
-        "runtime_home": None,
-        "service_name": "openclaw-gateway.service",
-        "platform": "webui",
-        "connection_state": "external",
-        "human_state": "External",
-        "action_modes": ["external"],
-        "channels": ["agent:main:main"],
-        "portal_url": portal_url,
-        "portal_reachable": _portal_reachable(portal_url),
-        "onboarding_commands": [],
-        "needs_rotem_reason": "Open Jarvis through button 06 in HERMES ONBOARD. The browser link works only while the SSH tunnel is open.",
-        "needs_rotem_reason_he": "פותחים את ג'רוויס דרך כפתור 06 בתיקיית HERMES ONBOARD. הקישור בדפדפן עובד רק כל עוד חלון ה־SSH tunnel פתוח.",
-        "brand_asset": "jarvis",
-        "diagnostic_pack_path": None,
-        "authority_paths": [str(status_path), str(launch_script)],
-        "notes": [
-            "Separate external portal. Keep Jarvis out of Hermes runtime state.",
-            "Local authority is read-only from jarvis-canon mirror files.",
-            "Tokenized access may still be required by the Jarvis lane itself.",
-        ],
-        "notes_he": [
-            "זהו פורטל חיצוני נפרד. לא מערבבים את Jarvis בתוך מצב הריצה של Hermes.",
-            "הסמכות המקומית נקראת רק מהמראה של jarvis-canon.",
-            "ייתכן שעדיין נדרש token או אימות בצד של Jarvis.",
-        ],
-    }
-
-
-def _collect_surface_cards() -> Dict[str, Any]:
-    current_home = get_hermes_home().resolve()
-    operator_home = (Path.home() / ".hermes-twitter-operator").resolve()
-
-    main_channels = _load_channel_entries(current_home, "whatsapp")
-    main_state = _platform_state(current_home, "whatsapp")
-    operator_channels = _load_channel_entries(operator_home, "telegram")
-    operator_state = _platform_state(operator_home, "telegram")
-
-    main_commands = [
-        "HERMES_HOME=/home/rotemg/.hermes/profiles/madhatter hermes whatsapp",
-    ]
-    operator_commands = [
-        "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes gateway setup",
-        "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing list",
-        "HERMES_HOME=/home/rotemg/.hermes-twitter-operator hermes pairing approve telegram <CODE>",
-    ]
-    main_connection_state = main_state.get("state", "unknown")
-    operator_connection_state = operator_state.get("state", "unknown")
-
-    cards: List[Dict[str, Any]] = [
-        {
-            "id": "hermes-main",
-            "label": "Hermes Main / WhatsApp",
-            "visual_label": "Hermes - The Mad Hatter / WhatsApp",
-            "visual_label_he": "הרמס - הכובען המטורף / וואטסאפ",
-            "visual_role": "Main",
-            "scope": "current_runtime",
-            "identity": _surface_identity_label(current_home, "Hermes The Mad Hatter"),
-            "runtime_home": str(current_home),
-            "service_name": "hermes-gateway-madhatter.service",
-            "platform": "whatsapp",
-            "connection_state": main_connection_state,
-            "human_state": _human_state_for(
-                scope="current_runtime",
-                connection_state=main_connection_state,
-                onboarding_commands=main_commands,
-            ),
-            "action_modes": ["technical", "men_in_the_loop"],
-            "channels": [_display_channel(entry) for entry in main_channels],
-            "portal_url": "http://127.0.0.1:9119",
-            "portal_reachable": True,
-            "onboarding_commands": main_commands,
-            "needs_rotem_reason": "Only touch this lane for WhatsApp re-pair or an explicit takeover decision.",
-            "needs_rotem_reason_he": "כאן מתערבים רק כשצריך זיווג מחדש ל-WhatsApp או החלטת takeover מפורשת.",
-            "brand_asset": "whatsapp",
-            "diagnostic_pack_path": "/home/rotemg/.hermes/control/runbooks/hermes-main-diagnostic-pack-2026-04-17.md",
-            "authority_paths": [
-                str(current_home / "SOUL.md"),
-                str(current_home / "config.yaml"),
-                str(current_home / "gateway_state.json"),
-                str(current_home / "channel_directory.json"),
-            ],
-            "notes": [
-                "Primary Hermes runtime on WhatsApp.",
-                "Use this lane for orchestration, supervision, and explicit takeover only.",
-            ],
-            "notes_he": [
-                "זהו ה-runtime הראשי של Hermes על WhatsApp.",
-                "הקו הזה מיועד לאורקסטרציה, סיכומים, דיאגנוסטיקה, ו-takeover מפורש בלבד.",
-            ],
-        },
-        {
-            "id": "twitter-operator",
-            "label": "Twitter Operator / Telegram",
-            "visual_label": "Hermes Twitter Operator / Telegram",
-            "visual_label_he": "אופרטור הטוויטר של הרמס / טלגרם",
-            "visual_role": "Operator",
-            "scope": "aggregated",
-            "identity": _surface_identity_label(operator_home, "Hermes Twitter Operator"),
-            "runtime_home": str(operator_home),
-            "service_name": "hermes-twitter-operator-gateway.service",
-            "platform": "telegram",
-            "connection_state": operator_connection_state,
-            "human_state": _human_state_for(
-                scope="aggregated",
-                connection_state=operator_connection_state,
-                onboarding_commands=operator_commands,
-            ),
-            "action_modes": ["technical", "men_in_the_loop"],
-            "channels": [_display_channel(entry) for entry in operator_channels],
-            "portal_url": None,
-            "portal_reachable": None,
-            "onboarding_commands": operator_commands,
-            "needs_rotem_reason": "Publish approvals and Telegram pairing remain Rotem-gated on this lane.",
-            "needs_rotem_reason_he": "אישורי פרסום ו-pairing של טלגרם נשארים מאושרי-רותם בקו הזה.",
-            "brand_asset": "telegram",
-            "diagnostic_pack_path": "/home/rotemg/.hermes/control/runbooks/hermes-twitter-operator-diagnostic-pack-2026-04-17.md",
-            "authority_paths": [
-                "/home/rotemg/.hermes-twitter-operator/control/twitter-operator/HERMES_TWITTER_OPERATOR_PACKET.md",
-                "/home/rotemg/.hermes-twitter-operator/control/twitter-operator/HERMES_TWITTER_GATE_CONTRACT.md",
-                "/home/rotemg/.hermes-twitter-operator/control/twitter-operator/HERMES_TWITTER_TELEGRAM_READINESS.md",
-                "/home/rotemg/.hermes-twitter-operator/gateway_state.json",
-                "/home/rotemg/.hermes-twitter-operator/channel_directory.json",
-            ],
-            "notes": [
-                "Dedicated approval-first supervised operator runtime.",
-                "Telegram is the control surface. WhatsApp stays disabled for this runtime.",
-            ],
-            "notes_he": [
-                "זהו runtime ייעודי במצב approval-first supervised.",
-                "טלגרם הוא משטח השליטה. WhatsApp נשאר כבוי עבור ה-runtime הזה.",
-            ],
-        },
-        _jarvis_main_surface(),
-    ]
-
-    return {
-        **_dashboard_scope_meta("mixed"),
-        "cards": cards,
-        "quick_panel": _surface_quick_panel(current_home, operator_home),
-    }
-
-
-def _encode_runtime_home(home: Path) -> str:
-    raw = str(home.resolve()).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def _decode_runtime_home(encoded: str) -> Optional[Path]:
-    try:
-        padding = "=" * (-len(encoded) % 4)
-        raw = base64.urlsafe_b64decode(encoded + padding).decode("utf-8")
-        return Path(raw).resolve()
-    except Exception:
-        return None
-
-
-def _pack_session_ref(home: Path, session_id: str) -> str:
-    return f"{_encode_runtime_home(home)}:{session_id}"
-
-
-def _unpack_session_ref(session_ref: str) -> tuple[Path, str]:
-    if ":" not in session_ref:
-        return get_hermes_home().resolve(), session_ref
-    encoded_home, raw_session_id = session_ref.split(":", 1)
-    home = _decode_runtime_home(encoded_home)
-    if home is None or not (home / "state.db").exists():
-        return get_hermes_home().resolve(), session_ref
-    return home, raw_session_id
-
-
-def _open_runtime_session_db(home: Path):
-    from hermes_state import SessionDB
-
-    return SessionDB(db_path=home / "state.db")
-
-
-def _enrich_runtime_session(home: Path, session: Dict[str, Any]) -> Dict[str, Any]:
-    enriched = dict(session)
-    raw_id = enriched["id"]
-    enriched["runtime_home"] = str(home)
-    enriched["runtime_label"] = _runtime_label_for(home)
-    enriched["raw_session_id"] = raw_id
-    enriched["id"] = _pack_session_ref(home, raw_id)
-    return enriched
-
-
-def _list_sessions_across_runtimes() -> List[Dict[str, Any]]:
-    sessions: List[Dict[str, Any]] = []
-    for home in _iter_session_runtime_homes():
-        db = _open_runtime_session_db(home)
-        try:
-            count = db.session_count()
-            if count <= 0:
-                continue
-            for session in db.list_sessions_rich(limit=count, offset=0):
-                sessions.append(_enrich_runtime_session(home, session))
-        finally:
-            db.close()
-    sessions.sort(key=lambda s: s.get("started_at", 0), reverse=True)
-    return sessions
-
-
-def _search_sessions_across_runtimes(query: str, limit: int) -> List[Dict[str, Any]]:
-    import re
-
-    terms = []
-    for token in re.findall(r'"[^"]*"|\S+', query.strip()):
-        if token.startswith('"') or token.endswith("*"):
-            terms.append(token)
-        else:
-            terms.append(token + "*")
-    prefix_query = " ".join(terms)
-
-    matches: List[Dict[str, Any]] = []
-    seen: Dict[str, Dict[str, Any]] = {}
-    for home in _iter_session_runtime_homes():
-        db = _open_runtime_session_db(home)
-        try:
-            for match in db.search_messages(query=prefix_query, limit=limit):
-                session_ref = _pack_session_ref(home, match["session_id"])
-                if session_ref in seen:
-                    continue
-                seen[session_ref] = {
-                    "session_id": session_ref,
-                    "snippet": match.get("snippet", ""),
-                    "role": match.get("role"),
-                    "source": match.get("source"),
-                    "model": match.get("model"),
-                    "session_started": match.get("session_started"),
-                    "runtime_label": _runtime_label_for(home),
-                    "runtime_home": str(home),
-                }
-        finally:
-            db.close()
-    matches = list(seen.values())
-    matches.sort(key=lambda m: m.get("session_started") or 0, reverse=True)
-    return matches[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -774,7 +258,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "tts.provider": {
         "type": "select",
         "description": "Text-to-speech provider",
-        "options": ["edge", "deepdub", "elevenlabs", "openai", "neutts"],
+        "options": ["edge", "elevenlabs", "openai", "neutts"],
     },
     "stt.provider": {
         "type": "select",
@@ -848,8 +332,8 @@ _CATEGORY_MERGE: Dict[str, str] = {
     "checkpoints": "agent",
     "approvals": "security",
     "human_delay": "display",
-    "smart_model_routing": "agent",
     "dashboard": "display",
+    "code_execution": "agent",
 }
 
 # Display order for tabs — unlisted categories sort alphabetically after these.
@@ -947,7 +431,14 @@ class EnvVarReveal(BaseModel):
 
 
 _GATEWAY_HEALTH_URL = os.getenv("GATEWAY_HEALTH_URL")
-_GATEWAY_HEALTH_TIMEOUT = float(os.getenv("GATEWAY_HEALTH_TIMEOUT", "3"))
+try:
+    _GATEWAY_HEALTH_TIMEOUT = float(os.getenv("GATEWAY_HEALTH_TIMEOUT", "3"))
+except (ValueError, TypeError):
+    _log.warning(
+        "Invalid GATEWAY_HEALTH_TIMEOUT value %r — using default 3.0s",
+        os.getenv("GATEWAY_HEALTH_TIMEOUT"),
+    )
+    _GATEWAY_HEALTH_TIMEOUT = 3.0
 
 
 def _probe_gateway_health() -> tuple[bool, dict | None]:
@@ -989,29 +480,6 @@ def _probe_gateway_health() -> tuple[bool, dict | None]:
 @app.get("/api/status")
 async def get_status():
     current_ver, latest_ver = check_config_version()
-    config = load_config()
-    env_on_disk = load_env()
-    fallback_cfg = config.get("fallback_model")
-    fallback_model = ""
-    fallback_provider = ""
-    if isinstance(fallback_cfg, dict):
-        fallback_model = str(fallback_cfg.get("model") or "")
-        fallback_provider = str(fallback_cfg.get("provider") or "")
-    web_cfg = config.get("web") if isinstance(config.get("web"), dict) else {}
-    web_backend = str(web_cfg.get("backend") or "").strip().lower()
-    if not web_backend:
-        if env_on_disk.get("EXA_API_KEY") and not any(
-            env_on_disk.get(key) for key in ("PARALLEL_API_KEY", "FIRECRAWL_API_KEY", "TAVILY_API_KEY")
-        ):
-            web_backend = "exa"
-        elif env_on_disk.get("TAVILY_API_KEY") and not any(
-            env_on_disk.get(key) for key in ("PARALLEL_API_KEY", "FIRECRAWL_API_KEY")
-        ):
-            web_backend = "tavily"
-        elif env_on_disk.get("PARALLEL_API_KEY") and not env_on_disk.get("FIRECRAWL_API_KEY"):
-            web_backend = "parallel"
-        else:
-            web_backend = "firecrawl"
 
     # --- Gateway liveness detection ---
     # Try local PID check first (same-host).  If that fails and a remote
@@ -1056,7 +524,7 @@ async def get_status():
     if runtime:
         gateway_state = runtime.get("gateway_state")
         gateway_platforms = runtime.get("platforms") or {}
-        if configured_gateway_platforms:
+        if configured_gateway_platforms is not None:
             gateway_platforms = {
                 key: value
                 for key, value in gateway_platforms.items()
@@ -1081,12 +549,18 @@ async def get_status():
 
     active_sessions = 0
     try:
-        now = time.time()
-        active_sessions = sum(
-            1 for s in _list_sessions_across_runtimes()
-            if s.get("ended_at") is None
-            and (now - s.get("last_active", s.get("started_at", 0))) < 300
-        )
+        from hermes_state import SessionDB
+        db = SessionDB()
+        try:
+            sessions = db.list_sessions_rich(limit=50)
+            now = time.time()
+            active_sessions = sum(
+                1 for s in sessions
+                if s.get("ended_at") is None
+                and (now - s.get("last_active", s.get("started_at", 0))) < 300
+            )
+        finally:
+            db.close()
     except Exception:
         pass
 
@@ -1098,79 +572,210 @@ async def get_status():
         "env_path": str(get_env_path()),
         "config_version": current_ver,
         "latest_config_version": latest_ver,
-        "fallback_model": fallback_model,
-        "fallback_provider": fallback_provider,
-        "web_backend": web_backend,
-        "web_key_configured": {
-            "tavily": bool(env_on_disk.get("TAVILY_API_KEY")),
-            "firecrawl": bool(env_on_disk.get("FIRECRAWL_API_KEY")),
-            "parallel": bool(env_on_disk.get("PARALLEL_API_KEY")),
-            "exa": bool(env_on_disk.get("EXA_API_KEY")),
-        },
         "gateway_running": gateway_running,
         "gateway_pid": gateway_pid,
+        "gateway_health_url": _GATEWAY_HEALTH_URL,
         "gateway_state": gateway_state,
         "gateway_platforms": gateway_platforms,
         "gateway_exit_reason": gateway_exit_reason,
         "gateway_updated_at": gateway_updated_at,
         "active_sessions": active_sessions,
-        "ui_scopes": {
-            "status": "mixed",
-            "surfaces": "mixed",
-            "sessions": "aggregated",
-            "env": "current_runtime",
-            "skills": "current_runtime",
-            "config": "current_runtime",
-            "cron": "current_runtime",
-            "logs": "current_runtime",
-        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Gateway + update actions (invoked from the Status page).
+#
+# Both commands are spawned as detached subprocesses so the HTTP request
+# returns immediately.  stdin is closed (``DEVNULL``) so any stray ``input()``
+# calls fail fast with EOF rather than hanging forever.  stdout/stderr are
+# streamed to a per-action log file under ``~/.hermes/logs/<action>.log`` so
+# the dashboard can tail them back to the user.
+# ---------------------------------------------------------------------------
+
+_ACTION_LOG_DIR: Path = get_hermes_home() / "logs"
+
+# Short ``name`` (from the URL) → absolute log file path.
+_ACTION_LOG_FILES: Dict[str, str] = {
+    "gateway-restart": "gateway-restart.log",
+    "hermes-update": "hermes-update.log",
+}
+
+# ``name`` → most recently spawned Popen handle.  Used so ``status`` can
+# report liveness and exit code without shelling out to ``ps``.
+_ACTION_PROCS: Dict[str, subprocess.Popen] = {}
+
+
+def _action_env() -> Dict[str, str]:
+    env = {
+        **os.environ,
+        "HERMES_HOME": str(get_hermes_home()),
+        "HERMES_NONINTERACTIVE": "1",
+    }
+    if sys.platform != "win32":
+        xdg_runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
+        bus_path = Path(xdg_runtime_dir) / "bus"
+        if bus_path.exists() and not env.get("DBUS_SESSION_BUS_ADDRESS"):
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus_path}"
+    return env
+
+
+def _spawn_action_command(cmd: List[str], name: str) -> subprocess.Popen:
+    log_file_name = _ACTION_LOG_FILES[name]
+    _ACTION_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = _ACTION_LOG_DIR / log_file_name
+    log_file = open(log_path, "ab", buffering=0)
+    log_file.write(
+        f"\n=== {name} started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode()
+    )
+    log_file.write((" ".join(cmd) + "\n").encode())
+
+    popen_kwargs: Dict[str, Any] = {
+        "cwd": str(PROJECT_ROOT),
+        "stdin": subprocess.DEVNULL,
+        "stdout": log_file,
+        "stderr": subprocess.STDOUT,
+        "env": _action_env(),
+    }
+    if sys.platform == "win32":
+        popen_kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    _ACTION_PROCS[name] = proc
+    return proc
+
+
+def _spawn_hermes_action(subcommand: List[str], name: str) -> subprocess.Popen:
+    """Spawn ``hermes <subcommand>`` detached and record the Popen handle.
+
+    Uses the running interpreter's ``hermes_cli.main`` module so the action
+    inherits the same venv/PYTHONPATH the web server is using.
+    """
+    cmd = [sys.executable, "-m", "hermes_cli.main", *subcommand]
+    return _spawn_action_command(cmd, name)
+
+
+def _spawn_gateway_restart_action() -> subprocess.Popen:
+    """Restart the active gateway using its systemd unit when available."""
+    if sys.platform != "win32":
+        try:
+            from hermes_cli.gateway import get_service_name, get_systemd_unit_path
+
+            if get_systemd_unit_path(system=False).exists():
+                service_name = get_service_name()
+                script = (
+                    "import subprocess, sys\n"
+                    "svc = sys.argv[1]\n"
+                    "subprocess.run(['systemctl', '--user', 'reset-failed', svc], check=False)\n"
+                    "subprocess.run(['systemctl', '--user', 'restart', svc], check=True)\n"
+                )
+                return _spawn_action_command(
+                    [sys.executable, "-c", script, service_name],
+                    "gateway-restart",
+                )
+        except Exception:
+            _log.exception("Failed to spawn systemd gateway restart; falling back to CLI")
+    return _spawn_hermes_action(["gateway", "restart"], "gateway-restart")
+
+
+def _tail_lines(path: Path, n: int) -> List[str]:
+    """Return the last ``n`` lines of ``path``.  Reads the whole file — fine
+    for our small per-action logs.  Binary-decoded with ``errors='replace'``
+    so log corruption doesn't 500 the endpoint."""
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return []
+    lines = text.splitlines()
+    return lines[-n:] if n > 0 else lines
+
+
+@app.post("/api/gateway/restart")
+async def restart_gateway():
+    """Kick off a ``hermes gateway restart`` in the background."""
+    try:
+        proc = _spawn_gateway_restart_action()
+    except Exception as exc:
+        _log.exception("Failed to spawn gateway restart")
+        raise HTTPException(status_code=500, detail=f"Failed to restart gateway: {exc}")
+    return {
+        "ok": True,
+        "pid": proc.pid,
+        "name": "gateway-restart",
+    }
+
+
+@app.post("/api/hermes/update")
+async def update_hermes():
+    """Kick off ``hermes update`` in the background."""
+    try:
+        proc = _spawn_hermes_action(["update"], "hermes-update")
+    except Exception as exc:
+        _log.exception("Failed to spawn hermes update")
+        raise HTTPException(status_code=500, detail=f"Failed to start update: {exc}")
+    return {
+        "ok": True,
+        "pid": proc.pid,
+        "name": "hermes-update",
+    }
+
+
+@app.get("/api/actions/{name}/status")
+async def get_action_status(name: str, lines: int = 200):
+    """Tail an action log and report whether the process is still running."""
+    log_file_name = _ACTION_LOG_FILES.get(name)
+    if log_file_name is None:
+        raise HTTPException(status_code=404, detail=f"Unknown action: {name}")
+
+    log_path = _ACTION_LOG_DIR / log_file_name
+    tail = _tail_lines(log_path, min(max(lines, 1), 2000))
+
+    proc = _ACTION_PROCS.get(name)
+    if proc is None:
+        running = False
+        exit_code: Optional[int] = None
+        pid: Optional[int] = None
+    else:
+        exit_code = proc.poll()
+        running = exit_code is None
+        pid = proc.pid
+
+    return {
+        "name": name,
+        "running": running,
+        "exit_code": exit_code,
+        "pid": pid,
+        "lines": tail,
     }
 
 
 @app.get("/api/sessions")
 async def get_sessions(limit: int = 20, offset: int = 0):
     try:
-        runtime_homes = _iter_session_runtime_homes()
-        all_sessions = []
-        for home in runtime_homes:
-            db = _open_runtime_session_db(home)
-            try:
-                count = db.session_count()
-                if count <= 0:
-                    continue
-                for session in db.list_sessions_rich(limit=count, offset=0):
-                    all_sessions.append(_enrich_runtime_session(home, session))
-            finally:
-                db.close()
-        all_sessions.sort(key=lambda s: s.get("started_at", 0), reverse=True)
-        now = time.time()
-        total = len(all_sessions)
-        sessions = all_sessions[offset: offset + limit]
-        for s in sessions:
-            s["is_active"] = (
-                s.get("ended_at") is None
-                and (now - s.get("last_active", s.get("started_at", 0))) < 300
-            )
-        return {
-            "sessions": sessions,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            **_dashboard_scope_meta("aggregated"),
-            "runtime_count": len(runtime_homes),
-            "runtimes": [_runtime_ref(home) for home in runtime_homes],
-        }
+        from hermes_state import SessionDB
+        db = SessionDB()
+        try:
+            sessions = db.list_sessions_rich(limit=limit, offset=offset)
+            total = db.session_count()
+            now = time.time()
+            for s in sessions:
+                s["is_active"] = (
+                    s.get("ended_at") is None
+                    and (now - s.get("last_active", s.get("started_at", 0))) < 300
+                )
+            return {"sessions": sessions, "total": total, "limit": limit, "offset": offset}
+        finally:
+            db.close()
     except Exception as e:
         _log.exception("GET /api/sessions failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@app.get("/api/surfaces")
-async def get_surfaces():
-    try:
-        return _collect_surface_cards()
-    except Exception:
-        _log.exception("GET /api/surfaces failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -1180,7 +785,37 @@ async def search_sessions(q: str = "", limit: int = 20):
     if not q or not q.strip():
         return {"results": []}
     try:
-        return {"results": _search_sessions_across_runtimes(q, limit)}
+        from hermes_state import SessionDB
+        db = SessionDB()
+        try:
+            # Auto-add prefix wildcards so partial words match
+            # e.g. "nimb" → "nimb*" matches "nimby"
+            # Preserve quoted phrases and existing wildcards as-is
+            import re
+            terms = []
+            for token in re.findall(r'"[^"]*"|\S+', q.strip()):
+                if token.startswith('"') or token.endswith("*"):
+                    terms.append(token)
+                else:
+                    terms.append(token + "*")
+            prefix_query = " ".join(terms)
+            matches = db.search_messages(query=prefix_query, limit=limit)
+            # Group by session_id — return unique sessions with their best snippet
+            seen: dict = {}
+            for m in matches:
+                sid = m["session_id"]
+                if sid not in seen:
+                    seen[sid] = {
+                        "session_id": sid,
+                        "snippet": m.get("snippet", ""),
+                        "role": m.get("role"),
+                        "source": m.get("source"),
+                        "model": m.get("model"),
+                        "session_started": m.get("session_started"),
+                    }
+            return {"results": list(seen.values())}
+        finally:
+            db.close()
     except Exception:
         _log.exception("GET /api/sessions/search failed")
         raise HTTPException(status_code=500, detail="Search failed")
@@ -1376,7 +1011,8 @@ async def update_config(body: ConfigUpdate):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-def _collect_env_vars() -> Dict[str, Any]:
+@app.get("/api/env")
+async def get_env_vars():
     env_on_disk = load_env()
     result = {}
     for var_name, info in OPTIONAL_ENV_VARS.items():
@@ -1392,20 +1028,6 @@ def _collect_env_vars() -> Dict[str, Any]:
             "advanced": info.get("advanced", False),
         }
     return result
-
-
-@app.get("/api/env")
-async def get_env_vars():
-    return _collect_env_vars()
-
-
-@app.get("/api/env/state")
-async def get_env_state():
-    return {
-        **_dashboard_scope_meta("current_runtime"),
-        "env_path": str(get_env_path()),
-        "vars": _collect_env_vars(),
-    }
 
 
 @app.put("/api/env")
@@ -2103,38 +1725,8 @@ def _nous_poller(session_id: str) -> None:
             auth_state, min_key_ttl_seconds=300, timeout_seconds=15.0,
             force_refresh=False, force_mint=True,
         )
-        # Save into credential pool same as auth_commands.py does
-        from agent.credential_pool import (
-            PooledCredential,
-            load_pool,
-            AUTH_TYPE_OAUTH,
-            SOURCE_MANUAL,
-        )
-        pool = load_pool("nous")
-        entry = PooledCredential.from_dict("nous", {
-            **full_state,
-            "label": "dashboard device_code",
-            "auth_type": AUTH_TYPE_OAUTH,
-            "source": f"{SOURCE_MANUAL}:dashboard_device_code",
-            "base_url": full_state.get("inference_base_url"),
-        })
-        pool.add_entry(entry)
-        # Also persist to auth store so get_nous_auth_status() sees it
-        # (matches what _login_nous in auth.py does for the CLI flow).
-        try:
-            from hermes_cli.auth import (
-                _load_auth_store, _save_provider_state, _save_auth_store,
-                _auth_store_lock,
-            )
-            with _auth_store_lock():
-                auth_store = _load_auth_store()
-                _save_provider_state(auth_store, "nous", full_state)
-                _save_auth_store(auth_store)
-        except Exception as store_exc:
-            _log.warning(
-                "oauth/device: credential pool saved but auth store write failed "
-                "(session=%s): %s", session_id, store_exc,
-            )
+        from hermes_cli.auth import persist_nous_credentials
+        persist_nous_credentials(full_state)
         with _oauth_sessions_lock:
             sess["status"] = "approved"
         _log.info("oauth/device: nous login completed (session=%s)", session_id)
@@ -2360,39 +1952,38 @@ async def cancel_oauth_session(session_id: str, request: Request):
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str):
-    home, raw_session_id = _unpack_session_ref(session_id)
-    db = _open_runtime_session_db(home)
+    from hermes_state import SessionDB
+    db = SessionDB()
     try:
-        sid = db.resolve_session_id(raw_session_id)
+        sid = db.resolve_session_id(session_id)
         session = db.get_session(sid) if sid else None
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        return _enrich_runtime_session(home, session)
+        return session
     finally:
         db.close()
 
 
 @app.get("/api/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str):
-    home, raw_session_id = _unpack_session_ref(session_id)
-    db = _open_runtime_session_db(home)
+    from hermes_state import SessionDB
+    db = SessionDB()
     try:
-        sid = db.resolve_session_id(raw_session_id)
+        sid = db.resolve_session_id(session_id)
         if not sid:
             raise HTTPException(status_code=404, detail="Session not found")
         messages = db.get_messages(sid)
-        return {"session_id": _pack_session_ref(home, sid), "messages": messages}
+        return {"session_id": sid, "messages": messages}
     finally:
         db.close()
 
 
 @app.delete("/api/sessions/{session_id}")
 async def delete_session_endpoint(session_id: str):
-    home, raw_session_id = _unpack_session_ref(session_id)
-    db = _open_runtime_session_db(home)
+    from hermes_state import SessionDB
+    db = SessionDB()
     try:
-        sid = db.resolve_session_id(raw_session_id) or raw_session_id
-        if not db.delete_session(sid):
+        if not db.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         return {"ok": True}
     finally:
@@ -2556,33 +2147,14 @@ class SkillToggle(BaseModel):
 
 @app.get("/api/skills")
 async def get_skills():
-    return _collect_skills()["skills"]
-
-
-def _collect_skills() -> Dict[str, Any]:
     from tools.skills_tool import _find_all_skills
-    from tools.skills_tool import SKILLS_DIR
     from hermes_cli.skills_config import get_disabled_skills
-    from agent.skill_utils import get_external_skills_dirs
-
     config = load_config()
     disabled = get_disabled_skills(config)
     skills = _find_all_skills(skip_disabled=True)
     for s in skills:
         s["enabled"] = s["name"] not in disabled
-    bundled_manifest = SKILLS_DIR / ".bundled_manifest"
-    return {
-        "skills": skills,
-        **_dashboard_scope_meta("current_runtime"),
-        "skills_dir": str(SKILLS_DIR),
-        "external_dirs": [str(path) for path in get_external_skills_dirs()],
-        "bundled_manifest": str(bundled_manifest) if bundled_manifest.exists() else None,
-    }
-
-
-@app.get("/api/skills/state")
-async def get_skills_state():
-    return _collect_skills()
+    return skills
 
 
 @app.put("/api/skills/toggle")
@@ -2667,6 +2239,8 @@ async def update_config_raw(body: RawConfigUpdate):
 @app.get("/api/analytics/usage")
 async def get_usage_analytics(days: int = 30):
     from hermes_state import SessionDB
+    from agent.insights import InsightsEngine
+
     db = SessionDB()
     try:
         cutoff = time.time() - (days * 86400)
@@ -2678,7 +2252,8 @@ async def get_usage_analytics(days: int = 30):
                    SUM(reasoning_tokens) as reasoning_tokens,
                    COALESCE(SUM(estimated_cost_usd), 0) as estimated_cost,
                    COALESCE(SUM(actual_cost_usd), 0) as actual_cost,
-                   COUNT(*) as sessions
+                   COUNT(*) as sessions,
+                   SUM(COALESCE(api_call_count, 0)) as api_calls
             FROM sessions WHERE started_at > ?
             GROUP BY day ORDER BY day
         """, (cutoff,))
@@ -2689,7 +2264,8 @@ async def get_usage_analytics(days: int = 30):
                    SUM(input_tokens) as input_tokens,
                    SUM(output_tokens) as output_tokens,
                    COALESCE(SUM(estimated_cost_usd), 0) as estimated_cost,
-                   COUNT(*) as sessions
+                   COUNT(*) as sessions,
+                   SUM(COALESCE(api_call_count, 0)) as api_calls
             FROM sessions WHERE started_at > ? AND model IS NOT NULL
             GROUP BY model ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC
         """, (cutoff,))
@@ -2702,12 +2278,29 @@ async def get_usage_analytics(days: int = 30):
                    SUM(reasoning_tokens) as total_reasoning,
                    COALESCE(SUM(estimated_cost_usd), 0) as total_estimated_cost,
                    COALESCE(SUM(actual_cost_usd), 0) as total_actual_cost,
-                   COUNT(*) as total_sessions
+                   COUNT(*) as total_sessions,
+                   SUM(COALESCE(api_call_count, 0)) as total_api_calls
             FROM sessions WHERE started_at > ?
         """, (cutoff,))
         totals = dict(cur3.fetchone())
+        insights_report = InsightsEngine(db).generate(days=days)
+        skills = insights_report.get("skills", {
+            "summary": {
+                "total_skill_loads": 0,
+                "total_skill_edits": 0,
+                "total_skill_actions": 0,
+                "distinct_skills_used": 0,
+            },
+            "top_skills": [],
+        })
 
-        return {"daily": daily, "by_model": by_model, "totals": totals, "period_days": days}
+        return {
+            "daily": daily,
+            "by_model": by_model,
+            "totals": totals,
+            "period_days": days,
+            "skills": skills,
+        }
     finally:
         db.close()
 
@@ -2765,17 +2358,238 @@ def mount_spa(application: FastAPI):
 # Built-in dashboard themes — label + description only.  The actual color
 # definitions live in the frontend (web/src/themes/presets.ts).
 _BUILTIN_DASHBOARD_THEMES = [
-    {"name": "default",   "label": "Hermes Teal",  "description": "Classic dark teal — the canonical Hermes look"},
-    {"name": "midnight",  "label": "Midnight",      "description": "Deep blue-violet with cool accents"},
-    {"name": "ember",     "label": "Ember",          "description": "Warm crimson and bronze — forge vibes"},
-    {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
-    {"name": "cyberpunk", "label": "Cyberpunk",      "description": "Neon green on black — matrix terminal"},
-    {"name": "rose",      "label": "Rosé",           "description": "Soft pink and warm ivory — easy on the eyes"},
+    {"name": "default",            "label": "Hermes Teal",       "description": "Classic dark teal — the canonical Hermes look"},
+    {"name": "hermes-green-dark",  "label": "Hermes Green Dark", "description": "Readable green-on-teal dashboard for night use"},
+    {"name": "hermes-light",       "label": "Hermes Light",      "description": "Light readable dashboard with Hermes green accents"},
+    {"name": "midnight",           "label": "Midnight",          "description": "Deep blue-violet with cool accents"},
+    {"name": "ember",              "label": "Ember",             "description": "Warm crimson and bronze — forge vibes"},
+    {"name": "mono",               "label": "Mono",              "description": "Clean grayscale — minimal and focused"},
+    {"name": "cyberpunk",          "label": "Cyberpunk",         "description": "Neon green on black — matrix terminal"},
+    {"name": "rose",               "label": "Rosé",              "description": "Soft pink and warm ivory — easy on the eyes"},
 ]
 
 
+def _parse_theme_layer(value: Any, default_hex: str, default_alpha: float = 1.0) -> Optional[Dict[str, Any]]:
+    """Normalise a theme layer spec from YAML into `{hex, alpha}` form.
+
+    Accepts shorthand (a bare hex string) or full dict form.  Returns
+    ``None`` on garbage input so the caller can fall back to a built-in
+    default rather than blowing up.
+    """
+    if value is None:
+        return {"hex": default_hex, "alpha": default_alpha}
+    if isinstance(value, str):
+        return {"hex": value, "alpha": default_alpha}
+    if isinstance(value, dict):
+        hex_val = value.get("hex", default_hex)
+        alpha_val = value.get("alpha", default_alpha)
+        if not isinstance(hex_val, str):
+            return None
+        try:
+            alpha_f = float(alpha_val)
+        except (TypeError, ValueError):
+            alpha_f = default_alpha
+        return {"hex": hex_val, "alpha": max(0.0, min(1.0, alpha_f))}
+    return None
+
+
+_THEME_DEFAULT_TYPOGRAPHY: Dict[str, str] = {
+    "fontSans": 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+    "fontMono": 'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace',
+    "baseSize": "15px",
+    "lineHeight": "1.55",
+    "letterSpacing": "0",
+}
+
+_THEME_DEFAULT_LAYOUT: Dict[str, str] = {
+    "radius": "0.5rem",
+    "density": "comfortable",
+}
+
+_THEME_OVERRIDE_KEYS = {
+    "card", "cardForeground", "popover", "popoverForeground",
+    "primary", "primaryForeground", "secondary", "secondaryForeground",
+    "muted", "mutedForeground", "accent", "accentForeground",
+    "destructive", "destructiveForeground", "success", "warning",
+    "border", "input", "ring",
+}
+
+# Well-known named asset slots themes can populate.  Any other keys under
+# ``assets.custom`` are exposed as ``--theme-asset-custom-<key>`` CSS vars
+# for plugin/shell use.
+_THEME_NAMED_ASSET_KEYS = {"bg", "hero", "logo", "crest", "sidebar", "header"}
+
+# Component-style buckets themes can override.  The value under each bucket
+# is a mapping from camelCase property name to CSS string; each pair emits
+# ``--component-<bucket>-<kebab-property>`` on :root.  The frontend's shell
+# components (Card, App header, Backdrop, etc.) consume these vars so themes
+# can restyle chrome (clip-path, border-image, segmented progress, etc.)
+# without shipping their own CSS.
+_THEME_COMPONENT_BUCKETS = {
+    "card", "header", "footer", "sidebar", "tab",
+    "progress", "badge", "backdrop", "page",
+}
+
+_THEME_LAYOUT_VARIANTS = {"standard", "cockpit", "tiled"}
+
+# Cap on customCSS length so a malformed/oversized theme YAML can't blow up
+# the response payload or the <style> tag.  32 KiB is plenty for every
+# practical reskin (the Strike Freedom demo is ~2 KiB).
+_THEME_CUSTOM_CSS_MAX = 32 * 1024
+
+
+def _normalise_theme_definition(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalise a user theme YAML into the wire format `ThemeProvider`
+    expects.  Returns ``None`` if the theme is unusable.
+
+    Accepts both the full schema (palette/typography/layout) and a loose
+    form with bare hex strings, so hand-written YAMLs stay friendly.
+    """
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+
+    # Palette
+    palette_src = data.get("palette", {}) if isinstance(data.get("palette"), dict) else {}
+    # Allow top-level `colors.background` as a shorthand too.
+    colors_src = data.get("colors", {}) if isinstance(data.get("colors"), dict) else {}
+
+    def _layer(key: str, default_hex: str, default_alpha: float = 1.0) -> Dict[str, Any]:
+        spec = palette_src.get(key, colors_src.get(key))
+        parsed = _parse_theme_layer(spec, default_hex, default_alpha)
+        return parsed if parsed is not None else {"hex": default_hex, "alpha": default_alpha}
+
+    palette = {
+        "background": _layer("background", "#041c1c", 1.0),
+        "midground": _layer("midground", "#ffe6cb", 1.0),
+        "foreground": _layer("foreground", "#ffffff", 0.0),
+        "warmGlow": palette_src.get("warmGlow") or data.get("warmGlow") or "rgba(255, 189, 56, 0.35)",
+        "noiseOpacity": 1.0,
+    }
+    raw_noise = palette_src.get("noiseOpacity", data.get("noiseOpacity"))
+    try:
+        palette["noiseOpacity"] = float(raw_noise) if raw_noise is not None else 1.0
+    except (TypeError, ValueError):
+        palette["noiseOpacity"] = 1.0
+
+    # Typography
+    typo_src = data.get("typography", {}) if isinstance(data.get("typography"), dict) else {}
+    typography = dict(_THEME_DEFAULT_TYPOGRAPHY)
+    for key in ("fontSans", "fontMono", "fontDisplay", "fontUrl", "baseSize", "lineHeight", "letterSpacing"):
+        val = typo_src.get(key)
+        if isinstance(val, str) and val.strip():
+            typography[key] = val
+
+    # Layout
+    layout_src = data.get("layout", {}) if isinstance(data.get("layout"), dict) else {}
+    layout = dict(_THEME_DEFAULT_LAYOUT)
+    radius = layout_src.get("radius")
+    if isinstance(radius, str) and radius.strip():
+        layout["radius"] = radius
+    density = layout_src.get("density")
+    if isinstance(density, str) and density in ("compact", "comfortable", "spacious"):
+        layout["density"] = density
+
+    # Color overrides — keep only valid keys with string values.
+    overrides_src = data.get("colorOverrides", {})
+    color_overrides: Dict[str, str] = {}
+    if isinstance(overrides_src, dict):
+        for key, val in overrides_src.items():
+            if key in _THEME_OVERRIDE_KEYS and isinstance(val, str) and val.strip():
+                color_overrides[key] = val
+
+    # Assets — named slots + arbitrary user-defined keys.  Values must be
+    # strings (URLs or CSS ``url(...)``/``linear-gradient(...)`` expressions).
+    # We don't fetch remote assets here; the frontend just injects them as
+    # CSS vars.  Empty values are dropped so a theme can explicitly clear a
+    # slot by setting ``hero: ""``.
+    assets_out: Dict[str, Any] = {}
+    assets_src = data.get("assets", {}) if isinstance(data.get("assets"), dict) else {}
+    for key in _THEME_NAMED_ASSET_KEYS:
+        val = assets_src.get(key)
+        if isinstance(val, str) and val.strip():
+            assets_out[key] = val
+    custom_assets_src = assets_src.get("custom")
+    if isinstance(custom_assets_src, dict):
+        custom_assets: Dict[str, str] = {}
+        for key, val in custom_assets_src.items():
+            if (
+                isinstance(key, str)
+                and key.replace("-", "").replace("_", "").isalnum()
+                and isinstance(val, str)
+                and val.strip()
+            ):
+                custom_assets[key] = val
+        if custom_assets:
+            assets_out["custom"] = custom_assets
+
+    # Custom CSS — raw CSS text the frontend injects as a scoped <style>
+    # tag on theme apply.  Clipped to _THEME_CUSTOM_CSS_MAX to keep the
+    # payload bounded.  We intentionally do NOT parse/sanitise the CSS
+    # here — the dashboard is localhost-only and themes are user-authored
+    # YAML in ~/.hermes/, same trust level as the config file itself.
+    custom_css_val = data.get("customCSS")
+    custom_css: Optional[str] = None
+    if isinstance(custom_css_val, str) and custom_css_val.strip():
+        custom_css = custom_css_val[:_THEME_CUSTOM_CSS_MAX]
+
+    # Component style overrides — per-bucket dicts of camelCase CSS
+    # property -> CSS string.  The frontend converts these into CSS vars
+    # that shell components (Card, App header, Backdrop) consume.
+    component_styles_src = data.get("componentStyles", {})
+    component_styles: Dict[str, Dict[str, str]] = {}
+    if isinstance(component_styles_src, dict):
+        for bucket, props in component_styles_src.items():
+            if bucket not in _THEME_COMPONENT_BUCKETS or not isinstance(props, dict):
+                continue
+            clean: Dict[str, str] = {}
+            for prop, value in props.items():
+                if (
+                    isinstance(prop, str)
+                    and prop.replace("-", "").replace("_", "").isalnum()
+                    and isinstance(value, (str, int, float))
+                    and str(value).strip()
+                ):
+                    clean[prop] = str(value)
+            if clean:
+                component_styles[bucket] = clean
+
+    layout_variant_src = data.get("layoutVariant")
+    layout_variant = (
+        layout_variant_src
+        if isinstance(layout_variant_src, str) and layout_variant_src in _THEME_LAYOUT_VARIANTS
+        else "standard"
+    )
+
+    result: Dict[str, Any] = {
+        "name": name,
+        "label": data.get("label") or name,
+        "description": data.get("description", ""),
+        "palette": palette,
+        "typography": typography,
+        "layout": layout,
+        "layoutVariant": layout_variant,
+    }
+    if color_overrides:
+        result["colorOverrides"] = color_overrides
+    if assets_out:
+        result["assets"] = assets_out
+    if custom_css is not None:
+        result["customCSS"] = custom_css
+    if component_styles:
+        result["componentStyles"] = component_styles
+    return result
+
+
 def _discover_user_themes() -> list:
-    """Scan ~/.hermes/dashboard-themes/*.yaml for user-created themes."""
+    """Scan ~/.hermes/dashboard-themes/*.yaml for user-created themes.
+
+    Returns a list of fully-normalised theme definitions ready to ship
+    to the frontend, so the client can apply them without a secondary
+    round-trip or a built-in stub.
+    """
     themes_dir = get_hermes_home() / "dashboard-themes"
     if not themes_dir.is_dir():
         return []
@@ -2783,33 +2597,42 @@ def _discover_user_themes() -> list:
     for f in sorted(themes_dir.glob("*.yaml")):
         try:
             data = yaml.safe_load(f.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("name"):
-                result.append({
-                    "name": data["name"],
-                    "label": data.get("label", data["name"]),
-                    "description": data.get("description", ""),
-                })
         except Exception:
             continue
+        normalised = _normalise_theme_definition(data)
+        if normalised is not None:
+            result.append(normalised)
     return result
 
 
 @app.get("/api/dashboard/themes")
 async def get_dashboard_themes():
-    """Return available themes and the currently active one."""
+    """Return available themes and the currently active one.
+
+    Built-in entries ship name/label/description only (the frontend owns
+    their full definitions in `web/src/themes/presets.ts`).  User themes
+    from `~/.hermes/dashboard-themes/*.yaml` ship with their full
+    normalised definition under `definition`, so the client can apply
+    them without a stub.
+    """
     config = load_config()
     active = config.get("dashboard", {}).get("theme", "default")
     user_themes = _discover_user_themes()
-    # Merge built-in + user, user themes override built-in by name.
     seen = set()
     themes = []
     for t in _BUILTIN_DASHBOARD_THEMES:
         seen.add(t["name"])
         themes.append(t)
     for t in user_themes:
-        if t["name"] not in seen:
-            themes.append(t)
-            seen.add(t["name"])
+        if t["name"] in seen:
+            continue
+        themes.append({
+            "name": t["name"],
+            "label": t["label"],
+            "description": t["description"],
+            "definition": t,
+        })
+        seen.add(t["name"])
     return {"themes": themes, "active": active}
 
 
@@ -2866,13 +2689,35 @@ def _discover_dashboard_plugins() -> list:
                 if name in seen_names:
                     continue
                 seen_names.add(name)
+                # Tab options: ``path`` + ``position`` for a new tab, optional
+                # ``override`` to replace a built-in route, and ``hidden`` to
+                # register the plugin component/slots without adding a tab
+                # (useful for slot-only plugins like a header-crest injector).
+                raw_tab = data.get("tab", {}) if isinstance(data.get("tab"), dict) else {}
+                tab_info = {
+                    "path": raw_tab.get("path", f"/{name}"),
+                    "position": raw_tab.get("position", "end"),
+                }
+                override_path = raw_tab.get("override")
+                if isinstance(override_path, str) and override_path.startswith("/"):
+                    tab_info["override"] = override_path
+                if bool(raw_tab.get("hidden")):
+                    tab_info["hidden"] = True
+                # Slots: list of named slot locations this plugin populates.
+                # The frontend exposes ``registerSlot(pluginName, slotName, Component)``
+                # on window; plugins with non-empty slots call it from their JS bundle.
+                slots_src = data.get("slots")
+                slots: List[str] = []
+                if isinstance(slots_src, list):
+                    slots = [s for s in slots_src if isinstance(s, str) and s]
                 plugins.append({
                     "name": name,
                     "label": data.get("label", name),
                     "description": data.get("description", ""),
                     "icon": data.get("icon", "Puzzle"),
                     "version": data.get("version", "0.0.0"),
-                    "tab": data.get("tab", {"path": f"/{name}", "position": "end"}),
+                    "tab": tab_info,
+                    "slots": slots,
                     "entry": data.get("entry", "dist/index.js"),
                     "css": data.get("css"),
                     "has_api": bool(data.get("api")),
@@ -3014,13 +2859,15 @@ def start_server(
             "authentication. Only use on trusted networks.", host,
         )
 
+    # Record the bound host so host_header_middleware can validate incoming
+    # Host headers against it. Defends against DNS rebinding (GHSA-ppp5-vxwm-4cf7).
+    app.state.bound_host = host
+
     if open_browser:
-        import threading
         import webbrowser
 
         def _open():
-            import time as _t
-            _t.sleep(1.0)
+            time.sleep(1.0)
             webbrowser.open(f"http://{host}:{port}")
 
         threading.Thread(target=_open, daemon=True).start()

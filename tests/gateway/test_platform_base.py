@@ -119,24 +119,22 @@ class TestMessageEventGetCommandArgs:
         assert event.get_command_args() == "hello world"
 
 
-class TestOutboundVoiceRequest:
-    def test_hebrew_explicit_voice_requests(self):
-        assert text_requests_outbound_voice("שלח לי הודעה קולית")
-        assert text_requests_outbound_voice("תקליט לנו בהודעה קולית את הבדיחה")
-        assert text_requests_outbound_voice("לא עבד. תקליט מחדש")
+class TestOutboundVoiceConsent:
+    def test_english_voice_request(self):
+        assert text_requests_outbound_voice("please send a voice message") is True
 
-    def test_dictation_or_voice_mentions_do_not_request_voice_reply(self):
-        assert not text_requests_outbound_voice("[audio received]")
-        assert not text_requests_outbound_voice("שלח לי הודעה קצרה שאוכל להעתיק")
-        assert not text_requests_outbound_voice("הודעת קול לא עבדה קודם")
+    def test_hebrew_voice_request(self):
+        assert text_requests_outbound_voice("שלח לי הודעה קולית") is True
 
-    def test_negative_voice_request_blocks(self):
-        assert not text_requests_outbound_voice("טקסט בלבד, בלי הודעה קולית")
-        assert not text_requests_outbound_voice("don't send a voice message, text only")
+    def test_negative_request_blocks_voice(self):
+        assert text_requests_outbound_voice("do not send a voice message, text only") is False
 
-    def test_event_wrapper_uses_event_text(self):
-        event = MessageEvent(text="send me a voice note")
-        assert event_requests_outbound_voice(event)
+    def test_regular_text_is_not_voice_consent(self):
+        assert text_requests_outbound_voice("summarize this in text") is False
+
+    def test_event_voice_consent_uses_event_text(self):
+        event = MessageEvent(text="תקליט לי תשובה", message_type=MessageType.TEXT)
+        assert event_requests_outbound_voice(event) is True
 
 
 # ---------------------------------------------------------------------------

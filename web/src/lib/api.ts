@@ -1,5 +1,7 @@
 const BASE = "";
 
+import type { DashboardTheme } from "@/themes/types";
+
 // Ephemeral session token for protected endpoints.
 // Injected into index.html by the server — never fetched via API.
 declare global {
@@ -8,13 +10,20 @@ declare global {
   }
 }
 let _sessionToken: string | null = null;
+const SESSION_HEADER = "X-Hermes-Session-Token";
+
+function setSessionHeader(headers: Headers, token: string): void {
+  if (!headers.has(SESSION_HEADER)) {
+    headers.set(SESSION_HEADER, token);
+  }
+}
 
 export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   // Inject the session token into all /api/ requests.
   const headers = new Headers(init?.headers);
   const token = window.__HERMES_SESSION_TOKEN__;
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
+  if (token) {
+    setSessionHeader(headers, token);
   }
   const res = await fetch(`${BASE}${url}`, { ...init, headers });
   if (!res.ok) {
@@ -36,7 +45,6 @@ async function getSessionToken(): Promise<string> {
 
 export const api = {
   getStatus: () => fetchJSON<StatusResponse>("/api/status"),
-  getSurfaces: () => fetchJSON<SurfacesResponse>("/api/surfaces"),
   getSessions: (limit = 20, offset = 0) =>
     fetchJSON<PaginatedSessions>(`/api/sessions?limit=${limit}&offset=${offset}`),
   getSessionMessages: (id: string) =>
@@ -73,7 +81,6 @@ export const api = {
       body: JSON.stringify({ yaml_text }),
     }),
   getEnvVars: () => fetchJSON<Record<string, EnvVarInfo>>("/api/env"),
-  getEnvState: () => fetchJSON<EnvStateResponse>("/api/env/state"),
   setEnvVar: (key: string, value: string) =>
     fetchJSON<{ ok: boolean }>("/api/env", {
       method: "PUT",
@@ -92,7 +99,7 @@ export const api = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        [SESSION_HEADER]: token,
       },
       body: JSON.stringify({ key }),
     });
@@ -117,7 +124,6 @@ export const api = {
 
   // Skills & Toolsets
   getSkills: () => fetchJSON<SkillInfo[]>("/api/skills"),
-  getSkillsState: () => fetchJSON<SkillsStateResponse>("/api/skills/state"),
   toggleSkill: (name: string, enabled: boolean) =>
     fetchJSON<{ ok: boolean }>("/api/skills/toggle", {
       method: "PUT",
@@ -139,7 +145,7 @@ export const api = {
       `/api/providers/oauth/${encodeURIComponent(providerId)}`,
       {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { [SESSION_HEADER]: token },
       },
     );
   },
@@ -151,7 +157,7 @@ export const api = {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          [SESSION_HEADER]: token,
         },
         body: "{}",
       },
@@ -165,7 +171,7 @@ export const api = {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          [SESSION_HEADER]: token,
         },
         body: JSON.stringify({ session_id: sessionId, code }),
       },
@@ -181,27 +187,51 @@ export const api = {
       `/api/providers/oauth/sessions/${encodeURIComponent(sessionId)}`,
       {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { [SESSION_HEADER]: token },
       },
     );
   },
 
-  // Dashboard themes
-  getThemes: () =>
-    fetchJSON<ThemeListResponse>("/api/dashboard/themes"),
-  setTheme: (name: string) =>
-    fetchJSON<{ ok: boolean; theme: string }>("/api/dashboard/theme", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    }),
+  // Gateway / update actions
+  restartGateway: () =>
+    fetchJSON<ActionResponse>("/api/gateway/restart", { method: "POST" }),
+  updateHermes: () =>
+    fetchJSON<ActionResponse>("/api/hermes/update", { method: "POST" }),
+  getActionStatus: (name: string, lines = 200) =>
+    fetchJSON<ActionStatusResponse>(
+      `/api/actions/${encodeURIComponent(name)}/status?lines=${lines}`,
+    ),
 
   // Dashboard plugins
   getPlugins: () =>
     fetchJSON<PluginManifestResponse[]>("/api/dashboard/plugins"),
   rescanPlugins: () =>
     fetchJSON<{ ok: boolean; count: number }>("/api/dashboard/plugins/rescan"),
+
+  // Dashboard themes
+  getThemes: () =>
+    fetchJSON<DashboardThemesResponse>("/api/dashboard/themes"),
+  setTheme: (name: string) =>
+    fetchJSON<{ ok: boolean; theme: string }>("/api/dashboard/theme", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
 };
+
+export interface ActionResponse {
+  name: string;
+  ok: boolean;
+  pid: number;
+}
+
+export interface ActionStatusResponse {
+  exit_code: number | null;
+  lines: string[];
+  name: string;
+  pid: number | null;
+  running: boolean;
+}
 
 export interface PlatformStatus {
   error_code?: string;
@@ -215,11 +245,8 @@ export interface StatusResponse {
   config_path: string;
   config_version: number;
   env_path: string;
-  fallback_model?: string;
-  fallback_provider?: string;
-  web_backend?: string;
-  web_key_configured?: Record<string, boolean>;
   gateway_exit_reason: string | null;
+  gateway_health_url: string | null;
   gateway_pid: number | null;
   gateway_platforms: Record<string, PlatformStatus>;
   gateway_running: boolean;
@@ -228,69 +255,7 @@ export interface StatusResponse {
   hermes_home: string;
   latest_config_version: number;
   release_date: string;
-  ui_scopes?: Record<string, string>;
   version: string;
-}
-
-export interface SurfaceCard {
-  id: string;
-  label: string;
-  visual_label: string;
-  visual_label_he: string;
-  visual_role: string;
-  scope: string;
-  identity: string;
-  runtime_home: string | null;
-  service_name: string;
-  platform: string;
-  connection_state: string;
-  human_state: string;
-  action_modes: string[];
-  channels: string[];
-  portal_url: string | null;
-  portal_reachable: boolean | null;
-  onboarding_commands: string[];
-  needs_rotem_reason: string | null;
-  needs_rotem_reason_he: string | null;
-  brand_asset: string | null;
-  diagnostic_pack_path: string | null;
-  authority_paths: string[];
-  notes: string[];
-  notes_he: string[];
-}
-
-export interface SurfaceQuickPanelItem {
-  id: string;
-  kind: "command" | "path" | "note";
-  label: string;
-  label_he: string;
-  value: string;
-  note?: string | null;
-}
-
-export interface SurfaceQuickPanelSection {
-  id: string;
-  title: string;
-  title_he: string;
-  items: SurfaceQuickPanelItem[];
-}
-
-export interface SurfaceQuickPanel {
-  title: string;
-  title_he: string;
-  sections: SurfaceQuickPanelSection[];
-}
-
-export interface SurfacesResponse {
-  scope: string;
-  runtime_home: string;
-  cards: SurfaceCard[];
-  quick_panel: SurfaceQuickPanel;
-}
-
-export interface RuntimeRef {
-  label: string;
-  home: string;
 }
 
 export interface SessionInfo {
@@ -307,9 +272,6 @@ export interface SessionInfo {
   input_tokens: number;
   output_tokens: number;
   preview: string | null;
-  raw_session_id?: string;
-  runtime_home?: string;
-  runtime_label?: string;
 }
 
 export interface PaginatedSessions {
@@ -317,10 +279,6 @@ export interface PaginatedSessions {
   total: number;
   limit: number;
   offset: number;
-  scope?: string;
-  runtime_home?: string;
-  runtime_count?: number;
-  runtimes?: RuntimeRef[];
 }
 
 export interface EnvVarInfo {
@@ -332,13 +290,6 @@ export interface EnvVarInfo {
   is_password: boolean;
   tools: string[];
   advanced: boolean;
-}
-
-export interface EnvStateResponse {
-  scope: string;
-  runtime_home: string;
-  env_path: string;
-  vars: Record<string, EnvVarInfo>;
 }
 
 export interface SessionMessage {
@@ -372,6 +323,7 @@ export interface AnalyticsDailyEntry {
   estimated_cost: number;
   actual_cost: number;
   sessions: number;
+  api_calls: number;
 }
 
 export interface AnalyticsModelEntry {
@@ -380,6 +332,23 @@ export interface AnalyticsModelEntry {
   output_tokens: number;
   estimated_cost: number;
   sessions: number;
+  api_calls: number;
+}
+
+export interface AnalyticsSkillEntry {
+  skill: string;
+  view_count: number;
+  manage_count: number;
+  total_count: number;
+  percentage: number;
+  last_used_at: number | null;
+}
+
+export interface AnalyticsSkillsSummary {
+  total_skill_loads: number;
+  total_skill_edits: number;
+  total_skill_actions: number;
+  distinct_skills_used: number;
 }
 
 export interface AnalyticsResponse {
@@ -393,6 +362,11 @@ export interface AnalyticsResponse {
     total_estimated_cost: number;
     total_actual_cost: number;
     total_sessions: number;
+    total_api_calls: number;
+  };
+  skills: {
+    summary: AnalyticsSkillsSummary;
+    top_skills: AnalyticsSkillEntry[];
   };
 }
 
@@ -415,15 +389,6 @@ export interface SkillInfo {
   description: string;
   category: string;
   enabled: boolean;
-}
-
-export interface SkillsStateResponse {
-  scope: string;
-  runtime_home: string;
-  skills_dir: string;
-  external_dirs: string[];
-  bundled_manifest: string | null;
-  skills: SkillInfo[];
 }
 
 export interface ToolsetInfo {
@@ -526,9 +491,18 @@ export interface OAuthPollResponse {
 
 // ── Dashboard theme types ──────────────────────────────────────────────
 
-export interface ThemeListResponse {
-  themes: Array<{ name: string; label: string; description: string }>;
+export interface DashboardThemeSummary {
+  description: string;
+  label: string;
+  name: string;
+  /** Full theme definition for user themes; undefined for built-ins
+   *  (which the frontend already has locally). */
+  definition?: DashboardTheme;
+}
+
+export interface DashboardThemesResponse {
   active: string;
+  themes: DashboardThemeSummary[];
 }
 
 // ── Dashboard plugin types ─────────────────────────────────────────────

@@ -1,26 +1,12 @@
 import json
-from pathlib import Path
 from unittest.mock import AsyncMock
-
-import pytest
 
 from gateway.config import Platform, PlatformConfig, load_gateway_config
 
 
-@pytest.fixture(autouse=True)
-def clear_whatsapp_gating_env(monkeypatch):
-    monkeypatch.delenv("WHATSAPP_REQUIRE_MENTION", raising=False)
-    monkeypatch.delenv("WHATSAPP_MENTION_PATTERNS", raising=False)
-    monkeypatch.delenv("WHATSAPP_FREE_RESPONSE_CHATS", raising=False)
-    monkeypatch.delenv("WHATSAPP_FREE_RESPONSE_GROUP_USERS", raising=False)
-
-
-def _make_adapter(
-    require_mention=None,
-    mention_patterns=None,
-    free_response_chats=None,
-    free_response_group_users=None,
-):
+def _make_adapter(require_mention=None, mention_patterns=None, free_response_chats=None,
+                  free_response_group_users=None, dm_policy=None, allow_from=None,
+                  group_policy=None, group_allow_from=None):
     from gateway.platforms.whatsapp import WhatsAppAdapter
 
     extra = {}
@@ -32,13 +18,25 @@ def _make_adapter(
         extra["free_response_chats"] = free_response_chats
     if free_response_group_users is not None:
         extra["free_response_group_users"] = free_response_group_users
+    if dm_policy is not None:
+        extra["dm_policy"] = dm_policy
+    if allow_from is not None:
+        extra["allow_from"] = allow_from
+    if group_policy is not None:
+        extra["group_policy"] = group_policy
+    if group_allow_from is not None:
+        extra["group_allow_from"] = group_allow_from
 
     adapter = object.__new__(WhatsAppAdapter)
     adapter.platform = Platform.WHATSAPP
     adapter.config = PlatformConfig(enabled=True, extra=extra)
-    adapter._session_path = Path(extra.get("session_path", "/tmp/hermes-whatsapp-test-session"))
     adapter._message_handler = AsyncMock()
+    adapter._dm_policy = str(extra.get("dm_policy", "open")).strip().lower()
+    adapter._allow_from = WhatsAppAdapter._coerce_allow_list(extra.get("allow_from"))
+    adapter._group_policy = str(extra.get("group_policy", "open")).strip().lower()
+    adapter._group_allow_from = WhatsAppAdapter._coerce_allow_list(extra.get("group_allow_from"))
     adapter._mention_patterns = adapter._compile_mention_patterns()
+    adapter._free_response_chats = adapter._whatsapp_free_response_chats()
     return adapter
 
 
@@ -47,7 +45,6 @@ def _group_message(body="hello", **overrides):
         "isGroup": True,
         "body": body,
         "chatId": "120363001234567890@g.us",
-        "senderId": "19175395595@s.whatsapp.net",
         "mentionedIds": [],
         "botIds": ["15551230000@s.whatsapp.net", "15551230000@lid"],
         "quotedParticipant": "",
@@ -55,6 +52,21 @@ def _group_message(body="hello", **overrides):
     data.update(overrides)
     return data
 
+
+def _dm_message(body="hello", **overrides):
+    data = {
+        "isGroup": False,
+        "body": body,
+        "senderId": "6281234567890@s.whatsapp.net",
+        "from": "6281234567890@s.whatsapp.net",
+        "botIds": [],
+        "mentionedIds": [],
+    }
+    data.update(overrides)
+    return data
+
+
+# --- Existing tests (unchanged logic, updated helper) ---
 
 def test_group_messages_can_be_opened_via_config():
     adapter = _make_adapter(require_mention=False)
@@ -105,8 +117,8 @@ def test_config_bridges_whatsapp_group_settings(monkeypatch, tmp_path):
         "  mention_patterns:\n"
         "    - \"^\\\\s*chompy\\\\b\"\n"
         "  free_response_group_users:\n"
-        "    120363001234567890@g.us:\n"
-        "      - 19175395595@s.whatsapp.net\n",
+        "    \"120363001234567890@g.us\":\n"
+        "      - \"6281234567890\"\n",
         encoding="utf-8",
     )
 
@@ -121,12 +133,12 @@ def test_config_bridges_whatsapp_group_settings(monkeypatch, tmp_path):
     assert config.platforms[Platform.WHATSAPP].extra["require_mention"] is True
     assert config.platforms[Platform.WHATSAPP].extra["mention_patterns"] == [r"^\s*chompy\b"]
     assert config.platforms[Platform.WHATSAPP].extra["free_response_group_users"] == {
-        "120363001234567890@g.us": ["19175395595@s.whatsapp.net"],
+        "120363001234567890@g.us": ["6281234567890"],
     }
     assert __import__("os").environ["WHATSAPP_REQUIRE_MENTION"] == "true"
     assert json.loads(__import__("os").environ["WHATSAPP_MENTION_PATTERNS"]) == [r"^\s*chompy\b"]
     assert json.loads(__import__("os").environ["WHATSAPP_FREE_RESPONSE_GROUP_USERS"]) == {
-        "120363001234567890@g.us": ["19175395595@s.whatsapp.net"],
+        "120363001234567890@g.us": ["6281234567890"],
     }
 
 
@@ -148,97 +160,32 @@ def test_free_response_chats_does_not_bypass_other_groups():
     assert adapter._should_process_message(_group_message("hello everyone")) is False
 
 
-def test_free_response_group_users_bypasses_mention_for_matching_sender_only():
+def test_free_response_group_users_bypass_mention_for_allowed_sender():
     adapter = _make_adapter(
         require_mention=True,
-        free_response_group_users={
-            "120363001234567890@g.us": ["19175395595@s.whatsapp.net"],
-        },
+        free_response_group_users={"120363001234567890@g.us": ["6281234567890"]},
     )
 
     assert adapter._should_process_message(
-        _group_message("Rotem can ask freely", senderId="19175395595@s.whatsapp.net")
+        _group_message("hello everyone", senderId="6281234567890@s.whatsapp.net")
     ) is True
+
+
+def test_free_response_group_users_do_not_bypass_for_unlisted_sender():
+    adapter = _make_adapter(
+        require_mention=True,
+        free_response_group_users={"120363001234567890@g.us": ["6281234567890"]},
+    )
+
     assert adapter._should_process_message(
-        _group_message("other participant still needs mention", senderId="15550001111@s.whatsapp.net")
+        _group_message("hello everyone", senderId="6289999999999@s.whatsapp.net")
     ) is False
 
 
-def test_free_response_group_users_matches_lid_or_bare_phone_syntax():
-    adapter = _make_adapter(
-        require_mention=True,
-        free_response_group_users={
-            "120363001234567890@g.us": ["+19175395595"],
-        },
-    )
-
-    assert adapter._should_process_message(
-        _group_message("Rotem via LID syntax", senderId="19175395595:12@lid")
-    ) is True
-
-
-def test_free_response_group_users_resolves_phone_lid_aliases(tmp_path):
-    session_path = tmp_path / "session"
-    session_path.mkdir()
-    (session_path / "lid-mapping-19175395595.json").write_text(
-        json.dumps("267383306489914"),
-        encoding="utf-8",
-    )
-
-    adapter = _make_adapter(
-        require_mention=True,
-        free_response_group_users={
-            "120363001234567890@g.us": ["19175395595@s.whatsapp.net"],
-        },
-    )
-    adapter._session_path = session_path
-
-    assert adapter._should_process_message(
-        _group_message("Rotem via mapped LID", senderId="267383306489914@lid")
-    ) is True
-
-
-def test_free_response_group_users_does_not_bypass_other_groups():
-    adapter = _make_adapter(
-        require_mention=True,
-        free_response_group_users={
-            "999999999999@g.us": ["19175395595@s.whatsapp.net"],
-        },
-    )
-
-    assert adapter._should_process_message(
-        _group_message("Rotem still needs trigger in unlisted group", senderId="19175395595@s.whatsapp.net")
-    ) is False
-
-
-def test_non_free_group_user_can_still_trigger_with_mention_or_reply():
-    adapter = _make_adapter(
-        require_mention=True,
-        free_response_group_users={
-            "120363001234567890@g.us": ["19175395595@s.whatsapp.net"],
-        },
-    )
-
-    assert adapter._should_process_message(
-        _group_message(
-            "hi Hermes",
-            senderId="15550001111@s.whatsapp.net",
-            mentionedIds=["15551230000@s.whatsapp.net"],
-        )
-    ) is True
-    assert adapter._should_process_message(
-        _group_message(
-            "replying to Hermes",
-            senderId="15550001111@s.whatsapp.net",
-            quotedParticipant="15551230000@lid",
-        )
-    ) is True
-
-
-def test_dm_always_passes_even_with_require_mention():
+def test_dm_passes_with_default_open_policy():
     adapter = _make_adapter(require_mention=True)
 
-    dm = {"isGroup": False, "body": "hello", "botIds": [], "mentionedIds": []}
+    dm = _dm_message("hello")
     assert adapter._should_process_message(dm) is True
 
 
@@ -257,3 +204,130 @@ def test_mention_stripping_preserves_body_when_no_mention():
     data = _group_message("just a normal message")
     cleaned = adapter._clean_bot_mention_text(data["body"], data)
     assert cleaned == "just a normal message"
+
+
+# --- New dm_policy tests ---
+
+def test_dm_policy_disabled_blocks_all_dms():
+    adapter = _make_adapter(dm_policy="disabled")
+
+    assert adapter._should_process_message(_dm_message("hello")) is False
+
+
+def test_dm_policy_disabled_still_allows_groups():
+    adapter = _make_adapter(dm_policy="disabled", require_mention=False)
+
+    assert adapter._should_process_message(_group_message("hello")) is True
+
+
+def test_dm_policy_allowlist_blocks_unlisted_sender():
+    adapter = _make_adapter(dm_policy="allowlist", allow_from=["6289999999999@s.whatsapp.net"])
+
+    assert adapter._should_process_message(_dm_message("hello")) is False
+
+
+def test_dm_policy_allowlist_allows_listed_sender():
+    adapter = _make_adapter(dm_policy="allowlist", allow_from=["6281234567890@s.whatsapp.net"])
+
+    assert adapter._should_process_message(_dm_message("hello")) is True
+
+
+def test_dm_policy_open_allows_all_dms():
+    adapter = _make_adapter(dm_policy="open")
+
+    assert adapter._should_process_message(_dm_message("hello")) is True
+
+
+# --- New group_policy tests ---
+
+def test_group_policy_disabled_blocks_all_groups():
+    adapter = _make_adapter(group_policy="disabled", require_mention=False)
+
+    assert adapter._should_process_message(_group_message("hello")) is False
+
+
+def test_group_policy_disabled_still_allows_dms():
+    adapter = _make_adapter(group_policy="disabled")
+
+    assert adapter._should_process_message(_dm_message("hello")) is True
+
+
+def test_group_policy_allowlist_blocks_unlisted_group():
+    adapter = _make_adapter(group_policy="allowlist", group_allow_from=["999999999999@g.us"])
+
+    assert adapter._should_process_message(_group_message("agus test")) is False
+
+
+def test_group_policy_allowlist_allows_listed_group():
+    adapter = _make_adapter(
+        group_policy="allowlist",
+        group_allow_from=["120363001234567890@g.us"],
+        require_mention=True,
+        mention_patterns=[r"^\s*(?:(?:@)?(?:agus|Augustus))\b"],
+    )
+
+    # Listed group — passes the allowlist gate, mention still required
+    assert adapter._should_process_message(_group_message("hello")) is False
+    assert adapter._should_process_message(_group_message("agus test")) is True
+
+
+def test_group_policy_open_allows_all_groups():
+    adapter = _make_adapter(group_policy="open", require_mention=True)
+
+    # Open policy — all groups pass the gate (mention still needed)
+    assert adapter._should_process_message(_group_message("hello")) is False
+    assert adapter._should_process_message(_group_message("/status")) is True
+
+
+# --- Config bridging tests ---
+
+def test_config_bridges_whatsapp_dm_and_group_policy(monkeypatch, tmp_path):
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "whatsapp:\n"
+        "  dm_policy: disabled\n"
+        "  group_policy: allowlist\n"
+        "  group_allow_from:\n"
+        "    - \"120363001234567890@g.us\"\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.delenv("WHATSAPP_DM_POLICY", raising=False)
+    monkeypatch.delenv("WHATSAPP_GROUP_POLICY", raising=False)
+    monkeypatch.delenv("WHATSAPP_GROUP_ALLOWED_USERS", raising=False)
+
+    config = load_gateway_config()
+
+    assert config is not None
+    assert config.platforms[Platform.WHATSAPP].extra["dm_policy"] == "disabled"
+    assert config.platforms[Platform.WHATSAPP].extra["group_policy"] == "allowlist"
+    assert config.platforms[Platform.WHATSAPP].extra["group_allow_from"] == ["120363001234567890@g.us"]
+    assert __import__("os").environ["WHATSAPP_DM_POLICY"] == "disabled"
+    assert __import__("os").environ["WHATSAPP_GROUP_POLICY"] == "allowlist"
+    assert __import__("os").environ["WHATSAPP_GROUP_ALLOWED_USERS"] == "120363001234567890@g.us"
+
+
+def test_config_bridges_whatsapp_allow_from(monkeypatch, tmp_path):
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "whatsapp:\n"
+        "  dm_policy: allowlist\n"
+        "  allow_from:\n"
+        "    - \"6281234567890@s.whatsapp.net\"\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.delenv("WHATSAPP_DM_POLICY", raising=False)
+    monkeypatch.delenv("WHATSAPP_ALLOWED_USERS", raising=False)
+
+    config = load_gateway_config()
+
+    assert config is not None
+    assert config.platforms[Platform.WHATSAPP].extra["dm_policy"] == "allowlist"
+    assert config.platforms[Platform.WHATSAPP].extra["allow_from"] == ["6281234567890@s.whatsapp.net"]
+    assert __import__("os").environ["WHATSAPP_DM_POLICY"] == "allowlist"
+    assert __import__("os").environ["WHATSAPP_ALLOWED_USERS"] == "6281234567890@s.whatsapp.net"

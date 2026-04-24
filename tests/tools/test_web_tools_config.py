@@ -63,38 +63,6 @@ class TestFirecrawlClientConfig:
 
     # ── Configuration matrix ─────────────────────────────────────────
 
-    def test_cloud_mode_key_only(self):
-        """API key without URL → cloud Firecrawl."""
-        with patch.dict(os.environ, {"FIRECRAWL_API_KEY": "fc-test"}):
-            with patch("tools.web_tools.Firecrawl") as mock_fc:
-                from tools.web_tools import _get_firecrawl_client
-                result = _get_firecrawl_client()
-                mock_fc.assert_called_once_with(api_key="fc-test")
-                assert result is mock_fc.return_value
-
-    def test_self_hosted_with_key(self):
-        """Both key + URL → self-hosted with auth."""
-        with patch.dict(os.environ, {
-            "FIRECRAWL_API_KEY": "fc-test",
-            "FIRECRAWL_API_URL": "http://localhost:3002",
-        }):
-            with patch("tools.web_tools.Firecrawl") as mock_fc:
-                from tools.web_tools import _get_firecrawl_client
-                result = _get_firecrawl_client()
-                mock_fc.assert_called_once_with(
-                    api_key="fc-test", api_url="http://localhost:3002"
-                )
-                assert result is mock_fc.return_value
-
-    def test_self_hosted_no_key(self):
-        """URL only, no key → self-hosted without auth."""
-        with patch.dict(os.environ, {"FIRECRAWL_API_URL": "http://localhost:3002"}):
-            with patch("tools.web_tools.Firecrawl") as mock_fc:
-                from tools.web_tools import _get_firecrawl_client
-                result = _get_firecrawl_client()
-                mock_fc.assert_called_once_with(api_url="http://localhost:3002")
-                assert result is mock_fc.return_value
-
     def test_no_config_raises_with_helpful_message(self):
         """Neither key nor URL → ValueError with guidance."""
         with patch("tools.web_tools.Firecrawl"):
@@ -168,18 +136,6 @@ class TestFirecrawlClientConfig:
                     api_key="nous-token",
                     api_url="https://firecrawl-gateway.nousresearch.com",
                 )
-
-    def test_direct_mode_is_preferred_over_tool_gateway(self):
-        """Explicit Firecrawl config should win over the gateway fallback."""
-        with patch.dict(os.environ, {
-            "FIRECRAWL_API_KEY": "fc-test",
-            "TOOL_GATEWAY_DOMAIN": "nousresearch.com",
-        }):
-            with patch("tools.web_tools._read_nous_access_token", return_value="nous-token"):
-                with patch("tools.web_tools.Firecrawl") as mock_fc:
-                    from tools.web_tools import _get_firecrawl_client
-                    _get_firecrawl_client()
-                mock_fc.assert_called_once_with(api_key="fc-test")
 
     def test_nous_auth_token_respects_hermes_home_override(self, tmp_path):
         """Auth lookup should read from HERMES_HOME/auth.json, not ~/.hermes/auth.json."""
@@ -274,18 +230,6 @@ class TestFirecrawlClientConfig:
                 assert result is not None
 
     # ── Edge cases ───────────────────────────────────────────────────
-
-    def test_empty_string_key_treated_as_absent(self):
-        """FIRECRAWL_API_KEY='' should not be passed as api_key."""
-        with patch.dict(os.environ, {
-            "FIRECRAWL_API_KEY": "",
-            "FIRECRAWL_API_URL": "http://localhost:3002",
-        }):
-            with patch("tools.web_tools.Firecrawl") as mock_fc:
-                from tools.web_tools import _get_firecrawl_client
-                _get_firecrawl_client()
-                # Empty string is falsy, so only api_url should be passed
-                mock_fc.assert_called_once_with(api_url="http://localhost:3002")
 
     def test_empty_string_key_no_url_raises(self):
         """FIRECRAWL_API_KEY='' with no URL → should raise."""
@@ -506,25 +450,6 @@ class TestParallelClientConfig:
 
 class TestWebSearchErrorHandling:
     """Test suite for web_search_tool() error responses."""
-
-    def test_tavily_request_uses_bearer_auth_header(self):
-        import tools.web_tools
-
-        response = MagicMock()
-        response.json.return_value = {"ok": True}
-
-        payload = {"query": "test query"}
-        with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test"}, clear=False), \
-             patch("tools.web_tools.httpx.post", return_value=response) as mock_post:
-            result = tools.web_tools._tavily_request("search", payload)
-
-        assert result == {"ok": True}
-        response.raise_for_status.assert_called_once()
-        mock_post.assert_called_once()
-        _, kwargs = mock_post.call_args
-        assert kwargs["json"] == {"query": "test query"}
-        assert "api_key" not in kwargs["json"]
-        assert kwargs["headers"] == {"Authorization": "Bearer tvly-test"}
 
     def test_search_error_response_does_not_expose_diagnostics(self):
         import tools.web_tools

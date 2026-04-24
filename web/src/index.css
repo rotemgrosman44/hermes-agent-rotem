@@ -1,199 +1,121 @@
-@import url("https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800;900&display=swap");
-@import "tailwindcss";
+@import 'tailwindcss';
+@import '@nous-research/ui/styles/globals.css';
+
+/* Scan the published design-system bundle so its utility classes survive
+   Tailwind's JIT purge. */
+@source '../node_modules/@nous-research/ui/dist';
 
 /* ------------------------------------------------------------------ */
-/* Hermes Agent — Design tokens                                        */
-/* Matched to hermes-agent.nousresearch.com (dark teal theme)          */
+/* Hermes Agent — Nous DS with the LENS_0 (Hermes teal) lens applied   */
+/* statically. Mirrors nousnet-web/(hermes-agent)/layout.tsx so the    */
+/* canonical Hermes palette is the default — teal canvas + cream      */
+/* accent — without relying on leva/gsap at runtime.                  */
 /* ------------------------------------------------------------------ */
 
-/* --- Font faces --- */
-@font-face { font-family: "Collapse"; src: url("/fonts/Collapse-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "Collapse"; src: url("/fonts/Collapse-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
-@font-face { font-family: "Courier Prime"; src: url("/fonts/CourierPrime-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "Courier Prime"; src: url("/fonts/CourierPrime-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
-@font-face { font-family: "RulesCompressed"; src: url("/fonts/RulesCompressed-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "RulesCompressed"; src: url("/fonts/RulesCompressed-Medium.woff2") format("woff2"); font-weight: 600; font-display: swap; }
-@font-face { font-family: "RulesExpanded"; src: url("/fonts/RulesExpanded-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "RulesExpanded"; src: url("/fonts/RulesExpanded-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
-@font-face { font-family: "Mondwest"; src: url("/fonts/Mondwest-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+:root {
+  /* LENS_0 — from design-language/src/ui/components/overlays/index.tsx.
+     These are the defaults for the `default` (Hermes Teal) dashboard theme;
+     ThemeProvider rewrites them as inline styles when a user switches themes. */
+  --foreground: color-mix(in srgb, #ffffff 0%, transparent);
+  --foreground-base: #ffffff;
+  --foreground-alpha: 0;
+  --midground: color-mix(in srgb, #ffe6cb 100%, transparent);
+  --midground-base: #ffe6cb;
+  --midground-alpha: 1;
+  --background: color-mix(in srgb, #041c1c 100%, transparent);
+  --background-base: #041c1c;
+  --background-alpha: 1;
 
-@theme {
-/* ---- Hermes palette (default = brighter dusk) ---- */
-  --color-background: #123433;
-  --color-foreground: #ffe9cf;
-  --color-card: #173b39;
-  --color-card-foreground: #ffe6cb;
-  --color-primary: #ffe6cb;
-  --color-primary-foreground: #102c2a;
-  --color-secondary: #1c4744;
-  --color-secondary-foreground: #ffe6cb;
-  --color-muted: #1f4d49;
-  --color-muted-foreground: #aac0b5;
-  --color-accent: #214f4c;
-  --color-accent-foreground: #ffe6cb;
+  /* Consumed by <Backdrop />; also theme-switchable. */
+  --warm-glow: rgba(255, 189, 56, 0.35);
+  --noise-opacity-mul: 1;
+
+  /* Typography tokens — rewritten by ThemeProvider. Defaults match the
+     system stack so themes that don't override look native. */
+  --theme-font-sans: system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --theme-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo,
+    Consolas, monospace;
+  --theme-font-display: var(--theme-font-sans);
+  --theme-base-size: 15px;
+  --theme-line-height: 1.55;
+  --theme-letter-spacing: 0;
+
+  /* Layout tokens. */
+  --radius: 0.5rem;
+  --theme-radius: 0.5rem;
+  --theme-spacing-mul: 1;
+  --theme-density: comfortable;
+}
+
+/* Theme tokens cascade into the document root so every descendant inherits
+   the font stack, base size, and letter spacing without explicit calls. */
+html {
+  font-family: var(--theme-font-sans);
+  font-size: var(--theme-base-size);
+  line-height: var(--theme-line-height);
+  letter-spacing: var(--theme-letter-spacing);
+}
+
+body {
+  font-family: var(--theme-font-sans);
+}
+
+code, kbd, pre, samp, .font-mono, .font-mono-ui {
+  font-family: var(--theme-font-mono);
+}
+
+/* Density: scale the shadcn spacing utilities via a multiplier. The DS
+   components use `p-N` / `gap-N` / `space-*` classes which resolve against
+   Tailwind's spacing scale; multiplying `--spacing` at :root scales them
+   all proportionally in Tailwind v4. */
+@theme inline {
+  --spacing: calc(0.25rem * var(--theme-spacing-mul, 1));
+}
+
+/* Nousnet's hermes-agent layout bumps `small` and `code` to readable
+   dashboard sizes. Keep in sync. */
+small { font-size: 1.0625rem; }
+code { font-size: 0.875rem; }
+
+/* Shadcn-compat tokens.
+   The dashboard's page code predates the Nous DS and uses shadcn-style
+   utility classes (bg-card, text-muted-foreground, border-border, etc.)
+   extensively. Rather than rewrite every call site, we expose those
+   tokens on top of the Nous palette so classes continue to resolve. */
+@theme inline {
+  /* Remap foreground to midground so `text-foreground` / `bg-foreground`
+     stay visible — in LENS_0, `--foreground` itself has alpha 0. */
+  --color-foreground: var(--midground);
+
+  --color-card: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+  --color-card-foreground: var(--midground);
+  --color-primary: var(--midground);
+  --color-primary-foreground: var(--background-base);
+  --color-secondary: color-mix(in srgb, var(--midground-base) 6%, var(--background-base));
+  --color-secondary-foreground: var(--midground);
+  --color-muted: color-mix(in srgb, var(--midground-base) 8%, var(--background-base));
+  --color-muted-foreground: color-mix(in srgb, var(--midground-base) 55%, transparent);
+  --color-accent: color-mix(in srgb, var(--midground-base) 10%, var(--background-base));
+  --color-accent-foreground: var(--midground);
   --color-destructive: #fb2c36;
-  --color-destructive-foreground: #fff;
+  --color-destructive-foreground: #ffffff;
   --color-success: #4ade80;
   --color-warning: #ffbd38;
-  --color-border: color-mix(in srgb, #ffe6cb 15%, transparent);
-  --color-input: color-mix(in srgb, #ffe6cb 15%, transparent);
-  --color-ring: #ffe6cb;
-  --color-popover: #062424;
-  --color-popover-foreground: #ffe6cb;
+  --color-border: color-mix(in srgb, var(--midground-base) 15%, transparent);
+  --color-input: color-mix(in srgb, var(--midground-base) 15%, transparent);
+  --color-ring: var(--midground);
+  --color-popover: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+  --color-popover-foreground: var(--midground);
 
-  /* ---- Font stacks ---- */
-  --font-sans: "Mondwest", Arial, sans-serif;
-  --font-mono: "Courier Prime", "Courier New", monospace;
-  --font-display: "Mondwest", Arial, sans-serif;
-  --font-expanded: "RulesExpanded", Arial, sans-serif;
-  --font-compressed: "RulesCompressed", Arial, sans-serif;
+  --radius-sm: calc(var(--theme-radius) - 4px);
+  --radius-md: calc(var(--theme-radius) - 2px);
+  --radius-lg: var(--theme-radius);
+  --radius-xl: calc(var(--theme-radius) + 4px);
 }
 
-:root,
-html[data-tone="dusk"] {
-  --color-background: #1e4c49;
-  --color-foreground: #ffe9cf;
-  --color-card: #285955;
-  --color-card-foreground: #ffe9cf;
-  --color-primary: #ffe9cf;
-  --color-primary-foreground: #153230;
-  --color-secondary: #2a615d;
-  --color-secondary-foreground: #ffe9cf;
-  --color-muted: #316762;
-  --color-muted-foreground: #c7d8cf;
-  --color-accent: #346b66;
-  --color-accent-foreground: #ffe9cf;
-  --color-border: color-mix(in srgb, #ffe9cf 22%, transparent);
-  --color-input: color-mix(in srgb, #ffe9cf 22%, transparent);
-  --color-ring: #ffe9cf;
-  --color-popover: #285955;
-  --color-popover-foreground: #ffe9cf;
-}
 
-html[data-tone="night"] {
-  --color-background: #12302f;
-  --color-foreground: #ffead3;
-  --color-card: #183b39;
-  --color-card-foreground: #ffead3;
-  --color-primary: #ffead3;
-  --color-primary-foreground: #0f2a29;
-  --color-secondary: #1d4542;
-  --color-secondary-foreground: #ffead3;
-  --color-muted: #214c48;
-  --color-muted-foreground: #bdd0c7;
-  --color-accent: #275451;
-  --color-accent-foreground: #ffead3;
-  --color-border: color-mix(in srgb, #ffead3 20%, transparent);
-  --color-input: color-mix(in srgb, #ffead3 20%, transparent);
-  --color-ring: #ffead3;
-  --color-popover: #173a38;
-  --color-popover-foreground: #ffead3;
-}
-
-/* ---- Global body ---- */
-body {
-  margin: 0;
-  font-family: "Mondwest", Arial, sans-serif;
-  background: var(--color-background);
-  color: var(--color-foreground);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
-
-.workspace-daylight {
-  border-left: 1px solid color-mix(in srgb, var(--color-foreground) 12%, transparent);
-  border-right: 1px solid color-mix(in srgb, var(--color-foreground) 12%, transparent);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--color-card) 88%, white 8%) 0%,
-      color-mix(in srgb, var(--color-background) 82%, white 6%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--color-foreground) 8%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--color-foreground) 4%, transparent);
-}
-
-.workspace-daylight::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse at top, color-mix(in srgb, var(--color-foreground) 6%, transparent) 0%, transparent 58%),
-    linear-gradient(90deg, color-mix(in srgb, #ffbd38 7%, transparent) 0%, transparent 14%, transparent 86%, color-mix(in srgb, #ffbd38 6%, transparent) 100%);
-  opacity: 0.85;
-}
-
-/* ---- Selection ---- */
-::selection {
-  background: var(--color-foreground);
-  color: var(--color-background);
-}
-
-/* ---- Scrollbars (thin, subtle) ---- */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-*:hover {
-  scrollbar-color: color-mix(in srgb, var(--color-foreground) 15%, transparent) transparent;
-}
-html, body {
-  overflow-x: hidden;
-  scrollbar-color: color-mix(in srgb, var(--color-foreground) 25%, transparent) transparent;
-}
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-foreground) 20%, transparent);
-}
-::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--color-foreground) 35%, transparent);
-}
-
-/* ---- Hide scrollbar utility ---- */
-.scrollbar-none {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
-}
-
-/* ---- Code blocks ---- */
-code {
-  font-family: "Courier Prime", "Courier New", monospace;
-  font-size: 0.85em;
-  padding: 0.15em 0.4em;
-  border-radius: 0;
-  background: color-mix(in srgb, var(--color-foreground) 8%, transparent);
-}
-
-/* ---- Dither texture ---- */
-.dither {
-  background: repeating-conic-gradient(currentColor 0% 25%, #0000 0% 50%) 0 0 / 2px 2px;
-}
-
-/* ---- Blink cursor (only on group hover, like canonical) ---- */
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-.blink {
-  display: none;
-}
-.group:hover .blink {
-  display: inline-block;
-  animation: blink 1s step-end infinite;
-}
-
-/* ---- Page transitions ---- */
-@keyframes fade-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+/* Toast animations used by `components/Toast.tsx`. */
 @keyframes toast-in {
   from { opacity: 0; transform: translateX(16px); }
   to   { opacity: 1; transform: translateX(0); }
@@ -203,901 +125,51 @@ code {
   to   { opacity: 0; transform: translateX(16px); }
 }
 
-@keyframes rotem-pulse-soft {
-  0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 18px currentColor; }
-  50% { transform: scale(1.12); opacity: 0.72; box-shadow: 0 0 28px currentColor; }
+/* Hide scrollbar utility — used by the header's overflow-x nav row. */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
-@keyframes rotem-pulse-alert {
-  0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 18px currentColor; }
-  50% { transform: scale(1.18); opacity: 0.62; box-shadow: 0 0 34px currentColor; }
-}
-
-/* ---- Plus-lighter blend for headings ---- */
+/* Plus-lighter blend used by logos/titles for a subtle glow. */
 .blend-lighter {
   mix-blend-mode: plus-lighter;
 }
 
-/* ---- Font utilities ---- */
-.font-display { font-family: "Mondwest", Arial, sans-serif; }
-.font-expanded { font-family: "RulesExpanded", Arial, sans-serif; }
-.font-compressed { font-family: "RulesCompressed", Arial, sans-serif; }
-.font-courier { font-family: "Courier Prime", "Courier New", monospace; }
-.font-collapse { font-family: "Collapse", Arial, sans-serif; }
-.font-mono-ui { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace; }
+/* System UI-monospace stack — distinct from `font-courier` (Courier
+   Prime), used for dense data readouts where the display font would
+   break the grid. Routes through the theme's mono stack so themes
+   with a different monospace (JetBrains Mono, IBM Plex Mono, etc.)
+   still apply here. */
+.font-mono-ui {
+  font-family: var(--theme-font-mono);
+}
 
-/* ---- Subtle grain overlay for badges ---- */
+/* Subtle grain overlay for badges. */
 .grain {
   position: relative;
 }
 .grain::after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   opacity: 0.12;
   pointer-events: none;
-  background: repeating-conic-gradient(currentColor 0% 25%, #0000 0% 50%) 0 0 / 2px 2px;
+  background: repeating-conic-gradient(currentColor 0% 25%, #0000 0% 50%) 0 0 /
+    2px 2px;
 }
 
-/* ---- Global noise grain (canonical: color-dodge, #eaeaea, high density) ---- */
-.noise-overlay {
-  pointer-events: none;
-  position: fixed;
-  inset: 0;
-  z-index: 101;
-  mix-blend-mode: color-dodge;
-  opacity: 0.05;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' fill='%23eaeaea' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
-  background-size: 512px 512px;
+/* When a theme provides `assets.bg`, the backdrop's <div> renders it as
+   a CSS background; the default filler <img> is hidden to prevent
+   double-compositing. Unset → initial → empty, so the :not() selector
+   matches and the default image stays visible. */
+:root:not([style*="--theme-asset-bg:"]) .theme-default-filler {
+  display: block;
 }
-
-/* ---- Vignette (canonical: top-left amber radial, lighten blend) ---- */
-.warm-glow {
-  pointer-events: none;
-  position: fixed;
-  inset: 0;
-  z-index: 99;
-  mix-blend-mode: lighten;
-  opacity: 0.42;
-  background: radial-gradient(ellipse at 0% 0%, rgba(255,189,56,0.35) 0%, rgba(255,189,56,0) 60%);
-}
-
-/* ---- Rotem Focus: canonical surfaces dashboard ---- */
-.rotem-focus-dashboard-shell {
-  max-width: min(104rem, calc(100vw - 2rem));
-}
-
-.rotem-focus-band {
-  position: relative;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, white 20%, transparent);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--color-card) 86%, black 12%) 0%,
-      color-mix(in srgb, var(--color-background) 78%, black 20%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    inset 0 -18px 34px color-mix(in srgb, black 18%, transparent),
-    0 0 0 1px color-mix(in srgb, black 34%, transparent),
-    0 18px 42px color-mix(in srgb, black 18%, transparent);
-}
-
-.rotem-focus-band::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--color-success) 8%, transparent) 0%, transparent 32%, transparent 68%, color-mix(in srgb, var(--color-warning) 7%, transparent) 100%),
-    radial-gradient(circle at top left, color-mix(in srgb, white 5%, transparent) 0%, transparent 44%);
-  opacity: 0.92;
-}
-
-.rotem-focus-band > * {
-  position: relative;
-  z-index: 1;
-}
-
-.rotem-focus-band--intro {
-  padding: 0.95rem 1.25rem 1.1rem;
-  background:
-    linear-gradient(145deg, rgba(7, 23, 22, 0.14) 0%, rgba(7, 23, 22, 0.02) 42%, rgba(255, 189, 56, 0.06) 100%),
-    linear-gradient(180deg, color-mix(in srgb, var(--color-card) 96%, black 5%) 0%, color-mix(in srgb, var(--color-background) 90%, black 12%) 100%);
-}
-
-.rotem-focus-band--intro-centered {
-  text-align: center;
-}
-
-.rotem-focus-band--summary {
-  padding: 1rem 1.1rem 1.1rem;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-card) 94%, black 4%) 0%, color-mix(in srgb, var(--color-background) 91%, black 8%) 100%);
-}
-
-.rotem-focus-band--controls {
-  padding: 1rem 1.1rem 1.1rem;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-card) 90%, black 7%) 0%, color-mix(in srgb, var(--color-background) 86%, black 11%) 100%);
-}
-
-.rotem-focus-hero-shell {
-  max-width: 78rem;
-  margin: 0 auto;
-}
-
-.rotem-focus-hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(22rem, 0.95fr);
-  align-items: center;
-  gap: clamp(1.2rem, 3vw, 3.4rem);
-}
-
-.rotem-focus-hero-copy {
-  text-align: right;
-}
-
-.rotem-focus-hero-copy .rotem-focus-kicker,
-.rotem-focus-hero-copy .rotem-focus-heading--utility {
-  text-align: right;
-}
-
-.rotem-focus-hero-traffic {
-  display: flex;
-  justify-content: center;
-}
-
-.rotem-focus-kicker {
-  margin-bottom: 0.55rem;
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, white 82%, var(--color-success) 18%);
-}
-
-.rotem-focus-heading {
-  margin: 0;
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: clamp(1.85rem, 2.9vw, 2.75rem);
-  font-weight: 700;
-  line-height: 0.95;
-  letter-spacing: -0.025em;
-  color: color-mix(in srgb, white 96%, var(--color-foreground) 4%);
-  text-shadow: 0 1px 18px rgba(255, 255, 255, 0.08);
-  text-wrap: balance;
-  text-align: inherit;
-}
-
-.rotem-focus-heading--utility {
-  margin-top: 0.5rem;
-  font-size: clamp(1rem, 1.5vw, 1.18rem);
-  font-weight: 700;
-  line-height: 1.15;
-  color: color-mix(in srgb, white 88%, var(--color-success) 12%);
-}
-
-.rotem-focus-heading-he-hero {
-  margin: 0;
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: clamp(1.8rem, 2.7vw, 2.55rem);
-  font-weight: 900;
-  line-height: 1.08;
-  color: color-mix(in srgb, white 98%, var(--color-foreground) 2%);
-  text-shadow: 0 0 22px rgba(255, 255, 255, 0.11);
-}
-
-.rotem-focus-heading-he {
-  margin-top: 0.6rem;
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 1.15rem;
-  font-weight: 800;
-  line-height: 1.25;
-  color: color-mix(in srgb, white 94%, var(--color-success) 6%);
-}
-
-.rotem-focus-subheading {
-  max-width: 62rem;
-  margin: 0.9rem auto 0;
-  margin-bottom: 0;
-  font-size: 1.03rem;
-  line-height: 1.68;
-  color: color-mix(in srgb, white 84%, var(--color-muted-foreground) 16%);
-}
-
-.rotem-focus-subheading-he {
-  max-width: 40rem;
-  margin: 0.65rem auto 0;
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1.55;
-  color: color-mix(in srgb, white 92%, var(--color-muted-foreground) 8%);
-  text-align: center;
-}
-
-.rotem-focus-band-title {
-  margin: 0;
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: clamp(1.35rem, 2.1vw, 1.9rem);
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.02em;
-  color: color-mix(in srgb, white 95%, var(--color-foreground) 5%);
-}
-
-.rotem-focus-band-title--utility {
-  margin-top: 0.35rem;
-  font-size: 0.9rem;
-  color: color-mix(in srgb, white 82%, var(--color-muted-foreground) 18%);
-}
-
-.rotem-focus-band-title-he {
-  margin-top: 0.35rem;
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 1.34rem;
-  font-weight: 900;
-  line-height: 1.2;
-  color: color-mix(in srgb, white 96%, var(--color-foreground) 4%);
-}
-
-.rotem-focus-panel-title-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 1.26rem;
-  font-weight: 900;
-  line-height: 1.15;
-  color: color-mix(in srgb, white 97%, var(--color-foreground) 3%);
-}
-
-.rotem-focus-panel {
-  border: 1px solid color-mix(in srgb, white 20%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-card) 86%, black 12%) 0%, color-mix(in srgb, var(--color-background) 78%, black 20%) 100%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    inset 0 -12px 26px color-mix(in srgb, black 18%, transparent),
-    0 0 0 1px color-mix(in srgb, black 28%, transparent);
-}
-
-.rotem-focus-panel-title {
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 1.28rem;
-  font-weight: 700;
-  line-height: 1.05;
-  color: color-mix(in srgb, white 95%, var(--color-foreground) 5%);
-}
-
-.rotem-focus-card-description {
-  margin-top: 0.35rem;
-}
-
-.rotem-focus-summary-helper-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.96rem;
-  font-weight: 800;
-  line-height: 1.55;
-  color: color-mix(in srgb, white 93%, var(--color-muted-foreground) 7%);
-  text-align: right;
-}
-
-.rotem-focus-surface-card {
-  border-width: 1px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-card) 84%, black 14%) 0%, color-mix(in srgb, var(--color-background) 76%, black 22%) 100%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    inset 0 -16px 30px color-mix(in srgb, black 20%, transparent),
-    0 12px 28px color-mix(in srgb, black 18%, transparent);
-}
-
-.rotem-focus-surface-card .card-header,
-.rotem-focus-surface-card .card-content {
-  min-width: 0;
-}
-
-.rotem-focus-surface-card .flex {
-  min-width: 0;
-}
-
-.rotem-focus-surface-title {
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: clamp(0.98rem, 1.35vw, 1.18rem);
-  font-weight: 700;
-  line-height: 1.08;
-  letter-spacing: -0.025em;
-  color: color-mix(in srgb, white 90%, var(--color-success) 10%);
-  text-wrap: balance;
-}
-
-.rotem-focus-surface-title-he {
-  margin-top: 0.35rem;
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 1.28rem;
-  font-weight: 900;
-  line-height: 1.28;
-  color: color-mix(in srgb, white 98%, var(--color-foreground) 2%);
-}
-
-.rotem-focus-mark {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 4rem;
-}
-
-.rotem-focus-mark::after {
-  content: "";
-  position: absolute;
-  inset: -0.45rem;
-  border-radius: 1.4rem;
-  background: radial-gradient(circle, color-mix(in srgb, white 9%, transparent) 0%, transparent 68%);
-  opacity: 0.9;
-  pointer-events: none;
-}
-
-.rotem-focus-section {
-  border: 1px solid color-mix(in srgb, white 16%, transparent);
-  background: color-mix(in srgb, var(--color-background) 70%, black 24%);
-  padding: 0.72rem 0.78rem;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
-    inset 10px 0 22px color-mix(in srgb, black 12%, transparent);
-  text-align: center;
-}
-
-.rotem-focus-section--action {
-  border-color: color-mix(in srgb, var(--color-warning) 28%, transparent);
-  background:
-    linear-gradient(180deg, rgba(255, 189, 56, 0.09) 0%, rgba(255, 189, 56, 0.04) 100%),
-    color-mix(in srgb, var(--color-background) 76%, black 18%);
-}
-
-.rotem-focus-section-title-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.97rem;
-  font-weight: 900;
-  line-height: 1.3;
-  color: color-mix(in srgb, white 96%, var(--color-foreground) 4%);
-  text-align: center;
-}
-
-.rotem-focus-section-title-en {
-  margin-top: 0.16rem;
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, white 76%, var(--color-muted-foreground) 24%);
-  text-align: center;
-}
-
-.rotem-focus-section-helper {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.9rem;
-  font-weight: 600;
-  line-height: 1.45;
-  color: color-mix(in srgb, white 84%, var(--color-muted-foreground) 16%);
-}
-
-.rotem-focus-details {
-  border-top: 1px solid color-mix(in srgb, var(--color-foreground) 14%, transparent);
-  padding-top: 0.95rem;
-  min-width: 0;
-  text-align: center;
-}
-
-.rotem-focus-details > summary {
-  cursor: pointer;
-  list-style: none;
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, white 86%, var(--color-foreground) 14%);
-  text-align: center;
-}
-
-.rotem-focus-details > summary::-webkit-details-marker {
+:root[style*="--theme-asset-bg:"] .theme-default-filler {
   display: none;
 }
 
-.rotem-focus-details > summary::after {
-  content: " +";
-  color: color-mix(in srgb, var(--color-success) 45%, white 55%);
-}
-
-.rotem-focus-details[open] > summary::after {
-  content: " -";
-}
-
-.rotem-focus-helper {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  font-size: 0.88rem;
-  line-height: 1.5;
-  color: color-mix(in srgb, white 88%, var(--color-muted-foreground) 12%);
-}
-
-.rotem-focus-helper-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-weight: 600;
-  color: color-mix(in srgb, white 90%, var(--color-muted-foreground) 10%);
-}
-
-.rotem-focus-inline-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-weight: 700;
-  color: color-mix(in srgb, white 84%, var(--color-muted-foreground) 16%);
-}
-
-.rotem-focus-traffic-pad {
-  display: grid;
-  gap: 0.7rem;
-  max-width: 28rem;
-  margin: 0 auto;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.rotem-focus-traffic-card {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0.9rem;
-  min-height: 5.35rem;
-  border: 1px solid color-mix(in srgb, white 18%, transparent);
-  padding: 0.7rem 0.78rem;
-  border-radius: 1.35rem;
-  text-align: left;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    inset 0 -14px 26px color-mix(in srgb, black 20%, transparent),
-    0 10px 24px color-mix(in srgb, black 18%, transparent);
-}
-
-.rotem-focus-traffic-card--1 {
-  border-top-left-radius: 2.25rem;
-}
-
-.rotem-focus-traffic-card--2 {
-  border-top-right-radius: 2.25rem;
-}
-
-.rotem-focus-traffic-card--3 {
-  border-bottom-left-radius: 2.25rem;
-}
-
-.rotem-focus-traffic-card--4 {
-  border-bottom-right-radius: 2.25rem;
-}
-
-.rotem-focus-traffic-light {
-  width: 1rem;
-  height: 1rem;
-  border-radius: 999px;
-  box-shadow: 0 0 18px currentColor;
-  flex-shrink: 0;
-}
-
-.rotem-focus-traffic-card.is-live.rotem-focus-traffic-card--running .rotem-focus-traffic-light {
-  animation: rotem-pulse-soft 1.2s ease-in-out infinite;
-}
-
-.rotem-focus-traffic-card.is-live.rotem-focus-traffic-card--needs-rotem .rotem-focus-traffic-light,
-.rotem-focus-traffic-card.is-live.rotem-focus-traffic-card--blocked .rotem-focus-traffic-light {
-  animation: rotem-pulse-alert 0.95s ease-in-out infinite;
-}
-
-.rotem-focus-traffic-counter-shell {
-  display: flex;
-  min-width: 4.6rem;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.18rem;
-}
-
-.rotem-focus-traffic-counter {
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 1.28rem;
-  font-weight: 700;
-  line-height: 1;
-  color: color-mix(in srgb, white 98%, var(--color-foreground) 2%);
-}
-
-.rotem-focus-traffic-counter-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.72rem;
-  font-weight: 700;
-  line-height: 1.2;
-  color: color-mix(in srgb, white 82%, var(--color-muted-foreground) 18%);
-  text-align: center;
-}
-
-.rotem-focus-traffic-copy {
-  text-align: left;
-}
-
-.rotem-focus-traffic-title-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 1.02rem;
-  font-weight: 900;
-  color: color-mix(in srgb, white 97%, var(--color-foreground) 3%);
-}
-
-.rotem-focus-traffic-helper-en {
-  margin-top: 0.1rem;
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, white 74%, var(--color-muted-foreground) 26%);
-}
-
-.rotem-focus-summary-row {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  border: 1px solid color-mix(in srgb, white 18%, transparent);
-  background: color-mix(in srgb, var(--color-background) 70%, black 24%);
-  padding: 0.68rem 0.72rem;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
-}
-
-.rotem-focus-summary-row-title {
-  margin-top: 0.18rem;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, white 78%, var(--color-muted-foreground) 22%);
-}
-
-.rotem-focus-summary-row-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.98rem;
-  font-weight: 900;
-  color: color-mix(in srgb, white 96%, var(--color-foreground) 4%);
-}
-
-.rotem-focus-need-card,
-.rotem-focus-alert-card,
-.rotem-focus-muted-card {
-  border: 1px solid color-mix(in srgb, white 18%, transparent);
-  background: color-mix(in srgb, var(--color-background) 70%, black 24%);
-  padding: 0.68rem 0.74rem;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
-}
-
-.rotem-focus-dashboard-tile {
-  position: relative;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, white 20%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-card) 84%, black 13%) 0%, color-mix(in srgb, var(--color-background) 76%, black 22%) 100%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    inset 0 -18px 32px color-mix(in srgb, black 22%, transparent),
-    0 0 0 1px color-mix(in srgb, black 28%, transparent),
-    0 14px 34px color-mix(in srgb, black 18%, transparent);
-}
-
-.rotem-focus-dashboard-tile::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, white 5%, transparent), transparent 18%, transparent 82%, color-mix(in srgb, black 16%, transparent)),
-    radial-gradient(circle at top right, color-mix(in srgb, white 7%, transparent), transparent 42%);
-}
-
-.rotem-focus-dashboard-tile > * {
-  position: relative;
-  z-index: 1;
-}
-
-.rotem-focus-tile-meter {
-  display: grid;
-  min-width: 4.5rem;
-  place-items: center;
-  gap: 0.2rem;
-  border: 1px solid color-mix(in srgb, white 18%, transparent);
-  background: color-mix(in srgb, var(--color-background) 72%, black 24%);
-  padding: 0.54rem 0.62rem;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-    0 8px 20px color-mix(in srgb, black 18%, transparent);
-}
-
-.rotem-focus-tile-value {
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 1.3rem;
-  font-weight: 700;
-  line-height: 1;
-  color: color-mix(in srgb, white 99%, var(--color-foreground) 1%);
-}
-
-.rotem-focus-alert-card {
-  border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
-  background:
-    linear-gradient(180deg, rgba(255, 189, 56, 0.08) 0%, rgba(255, 189, 56, 0.03) 100%),
-    color-mix(in srgb, var(--color-background) 82%, black 12%);
-}
-
-.rotem-focus-side-panel {
-  align-self: start;
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.rotem-focus-side-shell,
-.rotem-focus-side-section {
-  border: 1px solid color-mix(in srgb, white 19%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-card) 84%, black 14%) 0%, color-mix(in srgb, var(--color-background) 78%, black 20%) 100%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
-    inset 0 -14px 28px color-mix(in srgb, black 20%, transparent),
-    0 0 0 1px color-mix(in srgb, black 24%, transparent);
-  padding: 0.76rem;
-}
-
-.rotem-focus-side-title {
-  margin: 0;
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 0.92rem;
-  font-weight: 700;
-  line-height: 1.02;
-  color: color-mix(in srgb, white 82%, var(--color-muted-foreground) 18%);
-}
-
-.rotem-focus-side-title-he {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 1.18rem;
-  font-weight: 900;
-  color: color-mix(in srgb, white 98%, var(--color-foreground) 2%);
-}
-
-.rotem-focus-runtime-chip {
-  border-color: color-mix(in srgb, white 34%, transparent);
-  background: color-mix(in srgb, white 10%, var(--color-background) 90%);
-  color: white;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    0 0 0 1px color-mix(in srgb, white 8%, transparent);
-}
-
-.rotem-focus-runtime-shell {
-  margin-top: 0.9rem;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.6rem;
-}
-
-.rotem-focus-runtime-label-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.55rem;
-}
-
-.rotem-focus-side-helper {
-  margin-bottom: 0.8rem;
-  border: 1px solid color-mix(in srgb, var(--color-foreground) 14%, transparent);
-  background: color-mix(in srgb, var(--color-background) 78%, black 18%);
-  padding: 0.74rem 0.82rem;
-  font-size: 0.9rem;
-  line-height: 1.55;
-  color: color-mix(in srgb, white 94%, var(--color-muted-foreground) 6%);
-}
-
-.rotem-focus-side-helper-he {
-  margin-top: 0.35rem;
-  font-family: "Heebo", Arial, sans-serif;
-  font-weight: 600;
-  color: color-mix(in srgb, white 84%, var(--color-muted-foreground) 16%);
-}
-
-.rotem-focus-quick-item {
-  display: flex;
-  gap: 0.7rem;
-  align-items: flex-start;
-  border: 1px solid color-mix(in srgb, white 15%, transparent);
-  background: color-mix(in srgb, var(--color-background) 70%, black 24%);
-  padding: 0.62rem;
-}
-
-.rotem-focus-quick-title {
-  font-family: "RulesExpanded", Arial, sans-serif;
-  font-size: 0.72rem;
-  font-weight: 700;
-  line-height: 1.3;
-  color: color-mix(in srgb, white 80%, var(--color-muted-foreground) 20%);
-}
-
-.rotem-focus-quick-title-he {
-  margin-top: 0.2rem;
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.96rem;
-  font-weight: 900;
-  color: color-mix(in srgb, white 96%, var(--color-foreground) 4%);
-}
-
-.rotem-focus-compact-shell {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 0.42rem;
-  text-align: center;
-}
-
-.rotem-focus-compact-value {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, white 18%, transparent);
-  background: color-mix(in srgb, var(--color-background) 74%, black 22%);
-  padding: 0.48rem 0.64rem;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: color-mix(in srgb, white 97%, var(--color-foreground) 3%);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
-  text-align: center;
-}
-
-.rotem-focus-compact-actions {
-  display: flex;
-  justify-content: center;
-  gap: 0.42rem;
-}
-
-.rotem-focus-compact-actions .inline-flex {
-  height: 1.8rem;
-  font-size: 0.72rem;
-}
-
-.rotem-focus-compact-note {
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.82rem;
-  font-weight: 600;
-  line-height: 1.45;
-  color: color-mix(in srgb, white 92%, var(--color-muted-foreground) 8%);
-  text-align: center;
-}
-
-.rotem-focus-details .rotem-focus-compact-value,
-.rotem-focus-side-panel .rotem-focus-compact-value {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.rotem-focus-details code,
-.rotem-focus-side-panel code {
-  display: block;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  text-align: center;
-}
-
-.rotem-focus-operations-grid {
-  display: grid;
-  gap: 5rem;
-}
-
-.rotem-focus-control-card-grid {
-  display: grid;
-  gap: 4rem;
-}
-
-.rotem-focus-operations-rail {
-  display: grid;
-  gap: 1rem;
-  min-width: 0;
-}
-
-@media (min-width: 1280px) {
-  .rotem-focus-operations-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.52fr);
-    align-items: start;
-    gap: 1.1rem;
-  }
-
-  .rotem-focus-control-card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1rem;
-  }
-
-  .rotem-focus-operations-rail {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (min-width: 1536px) {
-  .rotem-focus-operations-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(25rem, 0.48fr);
-  }
-}
-
-.rotem-focus-unavailable-note {
-  border: 1px solid rgba(251, 113, 133, 0.24);
-  background: color-mix(in srgb, var(--color-background) 80%, black 16%);
-  padding: 0.72rem 0.78rem;
-  font-family: "Heebo", Arial, sans-serif;
-  font-size: 0.88rem;
-  font-weight: 700;
-  line-height: 1.45;
-  color: color-mix(in srgb, white 94%, var(--color-foreground) 6%);
-}
-
-.rotem-focus-surface-card .text-muted-foreground[dir="rtl"],
-.rotem-focus-surface-card .text-foreground\/80[dir="rtl"],
-.rotem-focus-side-panel [dir="rtl"],
-.rotem-focus-panel [dir="rtl"] {
-  text-align: right;
-}
-
-@media (max-width: 768px) {
-  .rotem-focus-band--intro,
-  .rotem-focus-band--summary,
-  .rotem-focus-band--controls {
-    padding: 1rem;
-  }
-
-  .rotem-focus-heading {
-    font-size: clamp(2.15rem, 10vw, 3rem);
-  }
-
-  .rotem-focus-panel-title,
-  .rotem-focus-side-title {
-    font-size: 1.15rem;
-  }
-
-  .rotem-focus-traffic-pad {
-    max-width: none;
-  }
-
-  .rotem-focus-hero-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .rotem-focus-hero-copy,
-  .rotem-focus-hero-copy .rotem-focus-kicker,
-  .rotem-focus-hero-copy .rotem-focus-heading--utility {
-    text-align: center;
-  }
-
-  .rotem-focus-runtime-shell {
-    align-items: center;
-  }
-
-  .rotem-focus-runtime-label-row {
-    justify-content: center;
-  }
-}
-
-/* ---- Reduced motion ---- */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}

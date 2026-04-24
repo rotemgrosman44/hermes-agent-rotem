@@ -8,12 +8,12 @@ Supports seven TTS providers:
 - OpenAI TTS: Good quality, needs OPENAI_API_KEY
 - MiniMax TTS: High-quality with voice cloning, needs MINIMAX_API_KEY
 - Mistral (Voxtral TTS): Multilingual, native Opus, needs MISTRAL_API_KEY
+- Google Gemini TTS: Controllable, 30 prebuilt voices, needs GEMINI_API_KEY
 - NeuTTS (local, free, no API key): On-device TTS via neutts_cli, needs neutts installed
-- DeepDub (Hebrew): DeepDub REST with deterministic Opus conversion
 
 Output formats:
-- Opus (.ogg) for Telegram/WhatsApp voice bubbles
-- MP3 (.mp3) for everything else (CLI, Discord)
+- Opus (.ogg) for Telegram voice bubbles (requires ffmpeg for Edge TTS)
+- MP3 (.mp3) for everything else (CLI, Discord, WhatsApp)
 
 Configuration is loaded from ~/.hermes/config.yaml under the 'tts:' key.
 The user chooses the provider and voice; the model just sends text.
@@ -80,16 +80,23 @@ def _import_sounddevice():
     return sd
 
 
+def _import_kittentts():
+    """Lazy import KittenTTS. Returns the class or raises ImportError."""
+    from kittentts import KittenTTS
+    return KittenTTS
+
+
 # ===========================================================================
 # Defaults
 # ===========================================================================
 DEFAULT_PROVIDER = "edge"
 DEFAULT_EDGE_VOICE = "en-US-AriaNeural"
-EDGE_FALLBACK_VOICES = ("en-US-AndrewMultilingualNeural", "en-US-AriaNeural")
 DEFAULT_ELEVENLABS_VOICE_ID = "pNInz6obpgDQGcFmaJgB"  # Adam
 DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 DEFAULT_ELEVENLABS_STREAMING_MODEL_ID = "eleven_flash_v2_5"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts"
+DEFAULT_KITTENTTS_MODEL = "KittenML/kitten-tts-nano-0.8-int8"  # 25MB
+DEFAULT_KITTENTTS_VOICE = "Jasper"
 DEFAULT_OPENAI_VOICE = "alloy"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MINIMAX_MODEL = "speech-2.8-hd"
@@ -102,47 +109,93 @@ DEFAULT_XAI_LANGUAGE = "en"
 DEFAULT_XAI_SAMPLE_RATE = 24000
 DEFAULT_XAI_BIT_RATE = 128000
 DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
-DEFAULT_DEEPDUB_API_URL = "https://restapi.deepdub.ai/api/v1/tts"
-DEFAULT_DEEPDUB_MODEL = "dd-etts-3.0"
-DEFAULT_DEEPDUB_LOCALE = "he-IL"
-DEFAULT_DEEPDUB_PROFILE = "male"
-DEEPDUB_VOICE_PROFILES = {
-    "male": {
-        "voice_prompt_id": "f0c91054-ca6e-4ad6-831d-5fd7921ea944",
-        "label": "Male Storyteller",
-    },
-    "female": {
-        "voice_prompt_id": "fb158c16-af06-4a90-abbe-3599c942dd66_prompt-V2-Spontaneous-Speech",
-        "label": "Female Sales Agent (Neutral)",
-    },
-}
+DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+DEFAULT_GEMINI_TTS_VOICE = "Kore"
+DEFAULT_GEMINI_TTS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+# PCM output specs for Gemini TTS (fixed by the API)
+GEMINI_TTS_SAMPLE_RATE = 24000
+GEMINI_TTS_CHANNELS = 1
+GEMINI_TTS_SAMPLE_WIDTH = 2  # 16-bit PCM (L16)
 
 def _get_default_output_dir() -> str:
     from hermes_constants import get_hermes_dir
     return str(get_hermes_dir("cache/audio", "audio_cache"))
 
 DEFAULT_OUTPUT_DIR = _get_default_output_dir()
-MAX_TEXT_LENGTH = 4000
+
+# ---------------------------------------------------------------------------
+# Per-provider input-character limits (from official provider docs).
+# A single global cap was wrong: OpenAI is 4096, xAI is 15k, MiniMax is 10k,
+# ElevenLabs is model-dependent (5k / 10k / 30k / 40k), Gemini caps at ~8k
+# input tokens.  Users can override any of these via
+# ``tts.<provider>.max_text_length`` in config.yaml.
+# ---------------------------------------------------------------------------
+PROVIDER_MAX_TEXT_LENGTH: Dict[str, int] = {
+    "edge": 5000,         # edge-tts practical sync limit
+    "openai": 4096,       # https://platform.openai.com/docs/guides/text-to-speech
+    "xai": 15000,         # https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
+    "minimax": 10000,     # https://platform.minimax.io/docs/api-reference/speech-t2a-http (sync)
+    "mistral": 4000,      # conservative; no published per-request cap
+    "gemini": 5000,       # Gemini TTS caps at ~8k input tokens / ~655s audio
+    "elevenlabs": 10000,  # fallback when model-aware lookup can't resolve (multilingual_v2)
+    "neutts": 2000,       # local model, quality falls off on long text
+    "kittentts": 2000,    # local 25MB model
+}
+
+# ElevenLabs caps vary by model_id. https://elevenlabs.io/docs/overview/models
+ELEVENLABS_MODEL_MAX_TEXT_LENGTH: Dict[str, int] = {
+    "eleven_v3": 5000,
+    "eleven_ttv_v3": 5000,
+    "eleven_multilingual_v2": 10000,
+    "eleven_multilingual_v1": 10000,
+    "eleven_english_sts_v2": 10000,
+    "eleven_english_sts_v1": 10000,
+    "eleven_flash_v2": 30000,
+    "eleven_flash_v2_5": 40000,
+}
+
+# Final fallback when provider isn't recognised at all.
+FALLBACK_MAX_TEXT_LENGTH = 4000
+
+# Back-compat alias. Prefer ``_resolve_max_text_length()`` for new code.
+MAX_TEXT_LENGTH = FALLBACK_MAX_TEXT_LENGTH
 
 
-def is_speakable_tts_text(text: str) -> bool:
-    """Return True only when text has letters or numbers worth speaking.
+def _resolve_max_text_length(
+    provider: Optional[str],
+    tts_config: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Return the input-character cap for *provider*.
 
-    Emoji-only, punctuation-only, MEDIA directives, and empty markdown should
-    remain text-only instead of wasting a voice message.
+    Resolution order:
+      1. ``tts.<provider>.max_text_length`` (user override in config.yaml)
+      2. ElevenLabs model-aware table (keyed on configured ``model_id``)
+      3. ``PROVIDER_MAX_TEXT_LENGTH`` default
+      4. ``FALLBACK_MAX_TEXT_LENGTH`` (4000)
+
+    Non-positive or non-integer overrides fall through to the default so a
+    broken config can't accidentally disable truncation entirely.
     """
-    if not text:
-        return False
-    try:
-        cleaned = _strip_markdown_for_tts(text)
-    except NameError:
-        cleaned = text
-    cleaned = cleaned.replace("[[audio_as_voice]]", "")
-    cleaned = re.sub(r"MEDIA:\s*\S+", " ", cleaned)
-    for char in cleaned.strip():
-        if unicodedata.category(char)[0] in {"L", "N"}:
-            return True
-    return False
+    if not provider:
+        return FALLBACK_MAX_TEXT_LENGTH
+    key = provider.lower().strip()
+    cfg = tts_config or {}
+    prov_cfg = cfg.get(key) if isinstance(cfg.get(key), dict) else {}
+
+    override = prov_cfg.get("max_text_length") if prov_cfg else None
+    if isinstance(override, bool):
+        # bool is an int subclass; treat explicit booleans as "not set"
+        override = None
+    if isinstance(override, int) and override > 0:
+        return override
+
+    if key == "elevenlabs":
+        model_id = (prov_cfg or {}).get("model_id") or DEFAULT_ELEVENLABS_MODEL_ID
+        mapped = ELEVENLABS_MODEL_MAX_TEXT_LENGTH.get(str(model_id).strip())
+        if mapped:
+            return mapped
+
+    return PROVIDER_MAX_TEXT_LENGTH.get(key, FALLBACK_MAX_TEXT_LENGTH)
 
 
 # ===========================================================================
@@ -215,25 +268,6 @@ def _convert_to_opus(mp3_path: str) -> Optional[str]:
     return None
 
 
-def _transcode_to_opus(input_path: str, output_path: str) -> str:
-    """Convert arbitrary audio to Telegram-safe mono Ogg Opus."""
-    if not _has_ffmpeg():
-        raise FileNotFoundError("ffmpeg not found in PATH")
-    result = subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", input_path,
-            "-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1",
-            output_path,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=45,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "ffmpeg failed")[:300])
-    return output_path
-
-
 # ===========================================================================
 # Provider: Edge TTS (free)
 # ===========================================================================
@@ -253,34 +287,15 @@ async def _generate_edge_tts(text: str, output_path: str, tts_config: Dict[str, 
     edge_config = tts_config.get("edge", {})
     voice = edge_config.get("voice", DEFAULT_EDGE_VOICE)
     speed = float(edge_config.get("speed", tts_config.get("speed", 1.0)))
-    voices_to_try = []
-    for candidate in (voice, *EDGE_FALLBACK_VOICES):
-        if candidate and candidate not in voices_to_try:
-            voices_to_try.append(candidate)
 
-    kwargs = {}
+    kwargs = {"voice": voice}
     if speed != 1.0:
         pct = round((speed - 1.0) * 100)
         kwargs["rate"] = f"{pct:+d}%"
 
-    last_error = None
-    for candidate in voices_to_try:
-        try:
-            communicate = _edge_tts.Communicate(text, candidate, **kwargs)
-            await communicate.save(output_path)
-            if candidate != voice:
-                logger.warning("Edge TTS voice '%s' failed earlier; fell back to '%s'", voice, candidate)
-            return output_path
-        except Exception as e:
-            last_error = e
-            logger.warning("Edge TTS voice '%s' failed: %s", candidate, e)
-            try:
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-            except OSError:
-                pass
-
-    raise last_error or RuntimeError("Edge TTS failed with all configured fallback voices")
+    communicate = _edge_tts.Communicate(text, **kwargs)
+    await communicate.save(output_path)
+    return output_path
 
 
 # ===========================================================================
@@ -582,57 +597,169 @@ def _generate_mistral_tts(text: str, output_path: str, tts_config: Dict[str, Any
 
 
 # ===========================================================================
-# Provider: DeepDub Hebrew TTS
+# Provider: Google Gemini TTS
 # ===========================================================================
-def _resolve_deepdub_api_key() -> str:
-    return (
-        os.getenv("DEEPDUB_API_KEY", "").strip()
-        or os.getenv("DEEPDUB_TRIAL_KEY", "").strip()
+def _wrap_pcm_as_wav(
+    pcm_bytes: bytes,
+    sample_rate: int = GEMINI_TTS_SAMPLE_RATE,
+    channels: int = GEMINI_TTS_CHANNELS,
+    sample_width: int = GEMINI_TTS_SAMPLE_WIDTH,
+) -> bytes:
+    """Wrap raw signed-little-endian PCM with a standard WAV RIFF header.
+
+    Gemini TTS returns audio/L16;codec=pcm;rate=24000 -- raw PCM samples with
+    no container. We add a minimal WAV header so the file is playable and
+    ffmpeg can re-encode it to MP3/Opus downstream.
+    """
+    import struct
+
+    byte_rate = sample_rate * channels * sample_width
+    block_align = channels * sample_width
+    data_size = len(pcm_bytes)
+    fmt_chunk = struct.pack(
+        "<4sIHHIIHH",
+        b"fmt ",
+        16,             # fmt chunk size (PCM)
+        1,              # audio format (PCM)
+        channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        sample_width * 8,
     )
+    data_chunk_header = struct.pack("<4sI", b"data", data_size)
+    riff_size = 4 + len(fmt_chunk) + len(data_chunk_header) + data_size
+    riff_header = struct.pack("<4sI4s", b"RIFF", riff_size, b"WAVE")
+    return riff_header + fmt_chunk + data_chunk_header + pcm_bytes
 
 
-def _generate_deepdub_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
-    """Generate Hebrew speech using DeepDub REST and normalize Telegram audio."""
+def _generate_gemini_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
+    """Generate audio using Google Gemini TTS.
+
+    Gemini's generateContent endpoint with responseModalities=["AUDIO"] returns
+    raw 24kHz mono 16-bit PCM (L16) as base64. We wrap it with a WAV RIFF
+    header to produce a playable file, then ffmpeg-convert to MP3 / Opus if
+    the caller requested those formats (same pattern as NeuTTS).
+
+    Args:
+        text: Text to convert (prompt-style; supports inline direction like
+              "Say cheerfully:" and audio tags like [whispers]).
+        output_path: Where to save the audio file (.wav, .mp3, or .ogg).
+        tts_config: TTS config dict.
+
+    Returns:
+        Path to the saved audio file.
+    """
     import requests
 
-    dd_config = tts_config.get("deepdub", {})
-    profile = str(dd_config.get("profile") or DEFAULT_DEEPDUB_PROFILE).strip().lower()
-    if profile not in DEEPDUB_VOICE_PROFILES:
-        profile = DEFAULT_DEEPDUB_PROFILE
-
-    profile_data = DEEPDUB_VOICE_PROFILES[profile]
-    api_key = _resolve_deepdub_api_key()
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     if not api_key:
-        raise ValueError("DEEPDUB_API_KEY not set")
+        raise ValueError(
+            "GEMINI_API_KEY not set. Get one at https://aistudio.google.com/app/apikey"
+        )
 
-    payload = {
-        "model": dd_config.get("model") or DEFAULT_DEEPDUB_MODEL,
-        "targetText": text,
-        "locale": dd_config.get("locale") or DEFAULT_DEEPDUB_LOCALE,
-        "voicePromptId": dd_config.get("voice_prompt_id") or profile_data["voice_prompt_id"],
-        "format": "mp3",
+    gemini_config = tts_config.get("gemini", {})
+    model = str(gemini_config.get("model", DEFAULT_GEMINI_TTS_MODEL)).strip() or DEFAULT_GEMINI_TTS_MODEL
+    voice = str(gemini_config.get("voice", DEFAULT_GEMINI_TTS_VOICE)).strip() or DEFAULT_GEMINI_TTS_VOICE
+    base_url = str(
+        gemini_config.get("base_url")
+        or os.getenv("GEMINI_BASE_URL")
+        or DEFAULT_GEMINI_TTS_BASE_URL
+    ).strip().rstrip("/")
+
+    payload: Dict[str, Any] = {
+        "contents": [{"parts": [{"text": text}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {"voiceName": voice},
+                },
+            },
+        },
     }
-    response = requests.post(
-        dd_config.get("api_url") or DEFAULT_DEEPDUB_API_URL,
-        headers={"Content-Type": "application/json", "x-api-key": api_key},
-        json=payload,
-        timeout=int(dd_config.get("timeout", 45)),
-    )
-    if response.status_code != 200 or not response.content:
-        raise RuntimeError(f"DeepDub HTTP {response.status_code}")
 
-    if output_path.endswith(".ogg"):
-        raw_path = output_path.rsplit(".", 1)[0] + ".deepdub.mp3"
+    endpoint = f"{base_url}/models/{model}:generateContent"
+    response = requests.post(
+        endpoint,
+        params={"key": api_key},
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=60,
+    )
+    if response.status_code != 200:
+        # Surface the API error message when present
         try:
-            Path(raw_path).write_bytes(response.content)
-            _transcode_to_opus(raw_path, output_path)
-        finally:
-            try:
-                os.remove(raw_path)
-            except OSError:
-                pass
-    else:
-        Path(output_path).write_bytes(response.content)
+            err = response.json().get("error", {})
+            detail = err.get("message") or response.text[:300]
+        except Exception:
+            detail = response.text[:300]
+        raise RuntimeError(
+            f"Gemini TTS API error (HTTP {response.status_code}): {detail}"
+        )
+
+    try:
+        data = response.json()
+        parts = data["candidates"][0]["content"]["parts"]
+        audio_part = next((p for p in parts if "inlineData" in p or "inline_data" in p), None)
+        if audio_part is None:
+            raise RuntimeError("Gemini TTS response contained no audio data")
+        inline = audio_part.get("inlineData") or audio_part.get("inline_data") or {}
+        audio_b64 = inline.get("data", "")
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(f"Gemini TTS response was malformed: {e}") from e
+
+    if not audio_b64:
+        raise RuntimeError("Gemini TTS returned empty audio data")
+
+    pcm_bytes = base64.b64decode(audio_b64)
+    wav_bytes = _wrap_pcm_as_wav(pcm_bytes)
+
+    # Fast path: caller wants WAV directly, just write.
+    if output_path.lower().endswith(".wav"):
+        with open(output_path, "wb") as f:
+            f.write(wav_bytes)
+        return output_path
+
+    # Otherwise write WAV to a temp file and ffmpeg-convert to the target
+    # format (.mp3 or .ogg). If ffmpeg is missing, fall back to renaming the
+    # WAV -- this matches the NeuTTS behavior and keeps the tool usable on
+    # systems without ffmpeg (audio still plays, just with a misleading
+    # extension).
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(wav_bytes)
+        wav_path = tmp.name
+
+    try:
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            # For .ogg output, force libopus encoding (Telegram voice bubbles
+            # require Opus specifically; ffmpeg's default for .ogg is Vorbis).
+            if output_path.lower().endswith(".ogg"):
+                cmd = [
+                    ffmpeg, "-i", wav_path,
+                    "-acodec", "libopus", "-ac", "1",
+                    "-b:a", "64k", "-vbr", "off",
+                    "-y", "-loglevel", "error",
+                    output_path,
+                ]
+            else:
+                cmd = [ffmpeg, "-i", wav_path, "-y", "-loglevel", "error", output_path]
+            result = subprocess.run(cmd, capture_output=True, timeout=30)
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", errors="ignore")[:300]
+                raise RuntimeError(f"ffmpeg conversion failed: {stderr}")
+        else:
+            logger.warning(
+                "ffmpeg not found; writing raw WAV to %s (extension may be misleading)",
+                output_path,
+            )
+            shutil.copyfile(wav_path, output_path)
+    finally:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
 
     return output_path
 
@@ -646,6 +773,15 @@ def _check_neutts_available() -> bool:
     try:
         import importlib.util
         return importlib.util.find_spec("neutts") is not None
+    except Exception:
+        return False
+
+
+def _check_kittentts_available() -> bool:
+    """Check if the kittentts engine is importable (installed locally)."""
+    try:
+        import importlib.util
+        return importlib.util.find_spec("kittentts") is not None
     except Exception:
         return False
 
@@ -714,6 +850,69 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
 
 
 # ===========================================================================
+# Provider: KittenTTS (local, lightweight)
+# ===========================================================================
+
+# Module-level cache for KittenTTS model instance
+_kittentts_model_cache: Dict[str, Any] = {}
+
+
+def _generate_kittentts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
+    """Generate speech using KittenTTS local ONNX model.
+
+    KittenTTS is a lightweight TTS engine (25-80MB models) that runs
+    entirely on CPU without requiring a GPU or API key.
+
+    Args:
+        text: Text to convert to speech.
+        output_path: Where to save the audio file.
+        tts_config: TTS config dict.
+
+    Returns:
+        Path to the saved audio file.
+    """
+    KittenTTS = _import_kittentts()
+    kt_config = tts_config.get("kittentts", {})
+    model_name = kt_config.get("model", DEFAULT_KITTENTTS_MODEL)
+    voice = kt_config.get("voice", DEFAULT_KITTENTTS_VOICE)
+    speed = kt_config.get("speed", 1.0)
+    clean_text = kt_config.get("clean_text", True)
+
+    # Use cached model instance if available
+    global _kittentts_model_cache
+    if model_name not in _kittentts_model_cache:
+        logger.info("[KittenTTS] Loading model: %s", model_name)
+        _kittentts_model_cache[model_name] = KittenTTS(model_name)
+        logger.info("[KittenTTS] Model loaded successfully")
+
+    model = _kittentts_model_cache[model_name]
+
+    # Generate audio (returns numpy array at 24kHz)
+    audio = model.generate(text, voice=voice, speed=speed, clean_text=clean_text)
+
+    # Save as WAV
+    import soundfile as sf
+    wav_path = output_path
+    if not output_path.endswith(".wav"):
+        wav_path = output_path.rsplit(".", 1)[0] + ".wav"
+
+    sf.write(wav_path, audio, 24000)
+
+    # Convert to desired format if needed
+    if wav_path != output_path:
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            conv_cmd = [ffmpeg, "-i", wav_path, "-y", "-loglevel", "error", output_path]
+            subprocess.run(conv_cmd, check=True, timeout=30)
+            os.remove(wav_path)
+        else:
+            # No ffmpeg — rename the WAV to the expected path
+            os.rename(wav_path, output_path)
+
+    return output_path
+
+
+# ===========================================================================
 # Main tool function
 # ===========================================================================
 def text_to_speech_tool(
@@ -740,42 +939,37 @@ def text_to_speech_tool(
     if not text or not text.strip():
         return tool_error("Text is required", success=False)
 
-    # Truncate very long text with a warning
-    if len(text) > MAX_TEXT_LENGTH:
-        logger.warning("TTS text too long (%d chars), truncating to %d", len(text), MAX_TEXT_LENGTH)
-        text = text[:MAX_TEXT_LENGTH]
-
-    if not is_speakable_tts_text(text):
-        return tool_error("TTS skipped: no speakable text", success=False)
-
     tts_config = _load_tts_config()
     provider = _get_provider(tts_config)
 
+    # Truncate very long text with a warning. The cap is per-provider
+    # (OpenAI 4096, xAI 15k, MiniMax 10k, ElevenLabs model-aware, etc.).
+    max_len = _resolve_max_text_length(provider, tts_config)
+    if len(text) > max_len:
+        logger.warning(
+            "TTS text too long for provider %s (%d chars), truncating to %d",
+            provider, len(text), max_len,
+        )
+        text = text[:max_len]
+
     # Detect platform from gateway env var to choose the best output format.
-    # Telegram and WhatsApp voice bubbles require Opus (.ogg). OpenAI,
-    # ElevenLabs, Mistral, and DeepDub can produce or normalize directly to
-    # Opus when the requested output path ends in .ogg. Edge TTS and a few
-    # other providers output MP3/WAV first and are converted below with ffmpeg.
+    # Telegram voice bubbles require Opus (.ogg); OpenAI and ElevenLabs can
+    # produce Opus natively (no ffmpeg needed).  Edge TTS always outputs MP3
+    # and needs ffmpeg for conversion.
     from gateway.session_context import get_session_env
     platform = get_session_env("HERMES_SESSION_PLATFORM", "").lower()
-    want_opus = platform in ("telegram", "whatsapp")
+    want_opus = (platform == "telegram")
 
     # Determine output path
     if output_path:
         file_path = Path(output_path).expanduser()
-        if (
-            want_opus
-            and provider in ("openai", "elevenlabs", "mistral", "deepdub")
-            and file_path.suffix.lower() not in (".ogg", ".opus")
-        ):
-            file_path = file_path.with_suffix(".ogg")
     else:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = Path(DEFAULT_OUTPUT_DIR)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # Use .ogg for voice-message platforms with providers that can produce
-        # or normalize Opus directly.
-        if want_opus and provider in ("openai", "elevenlabs", "mistral", "deepdub"):
+        # Use .ogg for Telegram with providers that support native Opus output,
+        # otherwise fall back to .mp3 (Edge TTS will attempt ffmpeg conversion later).
+        if want_opus and provider in ("openai", "elevenlabs", "mistral", "gemini"):
             file_path = out_dir / f"tts_{timestamp}.ogg"
         else:
             file_path = out_dir / f"tts_{timestamp}.mp3"
@@ -828,9 +1022,9 @@ def text_to_speech_tool(
             logger.info("Generating speech with Mistral Voxtral TTS...")
             _generate_mistral_tts(text, file_str, tts_config)
 
-        elif provider == "deepdub":
-            logger.info("Generating speech with DeepDub TTS...")
-            _generate_deepdub_tts(text, file_str, tts_config)
+        elif provider == "gemini":
+            logger.info("Generating speech with Google Gemini TTS...")
+            _generate_gemini_tts(text, file_str, tts_config)
 
         elif provider == "neutts":
             if not _check_neutts_available():
@@ -841,6 +1035,19 @@ def text_to_speech_tool(
                 }, ensure_ascii=False)
             logger.info("Generating speech with NeuTTS (local)...")
             _generate_neutts(text, file_str, tts_config)
+
+        elif provider == "kittentts":
+            try:
+                _import_kittentts()
+            except ImportError:
+                return json.dumps({
+                    "success": False,
+                    "error": "KittenTTS provider selected but 'kittentts' package not installed. "
+                             "Run 'hermes setup tts' and choose KittenTTS, or install manually: "
+                             "pip install https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl"
+                }, ensure_ascii=False)
+            logger.info("Generating speech with KittenTTS (local, ~25MB)...")
+            _generate_kittentts(text, file_str, tts_config)
 
         else:
             # Default: Edge TTS (free), with NeuTTS as local fallback
@@ -878,19 +1085,16 @@ def text_to_speech_tool(
                 "error": f"TTS generation produced no output (provider: {provider})"
             }, ensure_ascii=False)
 
-        # Try Opus conversion for voice-message compatibility.
-        # WhatsApp voice notes also need Ogg/Opus; MP3 is delivered as a
-        # regular audio attachment and is easy to miss in group chats.
+        # Try Opus conversion for Telegram compatibility
+        # Edge TTS outputs MP3, NeuTTS/KittenTTS output WAV — all need ffmpeg conversion
         voice_compatible = False
-        if file_str.endswith((".ogg", ".opus")):
-            voice_compatible = True
-        elif want_opus or provider in ("edge", "neutts", "minimax", "xai"):
+        if provider in ("edge", "neutts", "minimax", "xai", "kittentts") and not file_str.endswith(".ogg"):
             opus_path = _convert_to_opus(file_str)
             if opus_path:
                 file_str = opus_path
                 voice_compatible = True
-        elif provider in ("elevenlabs", "openai", "mistral", "deepdub"):
-            voice_compatible = False
+        elif provider in ("elevenlabs", "openai", "mistral", "gemini"):
+            voice_compatible = file_str.endswith(".ogg")
 
         file_size = os.path.getsize(file_str)
         logger.info("TTS audio saved: %s (%s bytes, provider: %s)", file_str, f"{file_size:,}", provider)
@@ -939,13 +1143,6 @@ def check_tts_requirements() -> bool:
         bool: True if at least one provider can work.
     """
     try:
-        provider = _get_provider(_load_tts_config())
-        if provider == "deepdub":
-            import requests  # noqa: F401
-            return bool(_resolve_deepdub_api_key())
-    except Exception:
-        pass
-    try:
         _import_edge_tts()
         return True
     except ImportError:
@@ -966,6 +1163,8 @@ def check_tts_requirements() -> bool:
         return True
     if os.getenv("XAI_API_KEY"):
         return True
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        return True
     try:
         _import_mistral_client()
         if os.getenv("MISTRAL_API_KEY"):
@@ -973,6 +1172,8 @@ def check_tts_requirements() -> bool:
     except ImportError:
         pass
     if _check_neutts_available():
+        return True
+    if _check_kittentts_available():
         return True
     return False
 
@@ -1038,6 +1239,19 @@ def _strip_markdown_for_tts(text: str) -> str:
     return text.strip()
 
 
+def is_speakable_tts_text(text: str) -> bool:
+    """Return True only when text contains letters or numbers worth speaking."""
+    if not text:
+        return False
+    cleaned = _strip_markdown_for_tts(text)
+    cleaned = cleaned.replace("[[audio_as_voice]]", "")
+    cleaned = re.sub(r"MEDIA:\s*\S+", " ", cleaned)
+    for char in cleaned.strip():
+        if unicodedata.category(char)[0] in {"L", "N"}:
+            return True
+    return False
+
+
 def stream_tts_to_speaker(
     text_queue: queue.Queue,
     stop_event: threading.Event,
@@ -1069,6 +1283,14 @@ def stream_tts_to_speaker(
         voice_id = el_config.get("voice_id", voice_id)
         model_id = el_config.get("streaming_model_id",
                                  el_config.get("model_id", model_id))
+        # Per-sentence cap for the streaming path. Look up the cap against
+        # the *streaming* model_id (defaults to eleven_flash_v2_5 = 40k chars),
+        # not the sync model_id. A user override
+        # (tts.elevenlabs.max_text_length) still wins.
+        stream_max_len = _resolve_max_text_length(
+            "elevenlabs",
+            {**tts_config, "elevenlabs": {**el_config, "model_id": model_id}},
+        )
 
         api_key = os.getenv("ELEVENLABS_API_KEY", "")
         if not api_key:
@@ -1124,9 +1346,9 @@ def stream_tts_to_speaker(
             # Skip audio generation if no TTS client available
             if client is None:
                 return
-            # Truncate very long sentences
-            if len(cleaned) > MAX_TEXT_LENGTH:
-                cleaned = cleaned[:MAX_TEXT_LENGTH]
+            # Truncate very long sentences (ElevenLabs streaming path)
+            if len(cleaned) > stream_max_len:
+                cleaned = cleaned[:stream_max_len]
             try:
                 audio_iter = client.text_to_speech.convert(
                     text=cleaned,
@@ -1278,13 +1500,13 @@ from tools.registry import registry, tool_error
 
 TTS_SCHEMA = {
     "name": "text_to_speech",
-    "description": "Convert text to speech audio only when the user explicitly asks for a voice/audio message (for example: 'send me a voice note', 'תקליט', 'שלח הודעה קולית'). Returns a MEDIA: path that the platform delivers as a voice message. On Telegram/WhatsApp it plays as a voice bubble, on Discord as an audio attachment. In CLI mode, saves to ~/voice-memos/. Voice and provider are user-configured, not model-selected.",
+    "description": "Convert text to speech audio. Returns a MEDIA: path that the platform delivers as a voice message. On Telegram it plays as a voice bubble, on Discord/WhatsApp as an audio attachment. In CLI mode, saves to ~/voice-memos/. Voice and provider are user-configured, not model-selected.",
     "parameters": {
         "type": "object",
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The text to convert to speech. Keep under 4000 characters."
+                "description": "The text to convert to speech. Provider-specific character caps apply and are enforced automatically (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k depending on model); over-long input is truncated."
             },
             "output_path": {
                 "type": "string",
