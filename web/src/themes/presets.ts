@@ -124,6 +124,11 @@ export const hermesLightTheme: DashboardTheme = {
     input: "#a9cabe",
     ring: "#0f766e",
   },
+  customCSS: `
+    .blend-lighter {
+      mix-blend-mode: normal !important;
+    }
+  `,
 };
 
 export const midnightTheme: DashboardTheme = {
