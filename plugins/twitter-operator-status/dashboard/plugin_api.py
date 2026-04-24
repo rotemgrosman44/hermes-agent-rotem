@@ -100,7 +100,11 @@ def _gateway_status(home: Path) -> dict[str, Any]:
 
 
 def _watchdog_status() -> dict[str, Any]:
-    if not shutil.which("powershell.exe"):
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        candidate = Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+        powershell = str(candidate) if candidate.exists() else None
+    if not powershell:
         return {"available": False, "state": "unavailable", "detail": "powershell.exe not found"}
     command = (
         "Get-ScheduledTask -TaskName 'Hermes Twitter Gate A Watchdog' "
@@ -109,7 +113,7 @@ def _watchdog_status() -> dict[str, Any]:
     )
     try:
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", command],
+            [powershell, "-NoProfile", "-Command", command],
             capture_output=True,
             text=True,
             timeout=3,
