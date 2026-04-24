@@ -1,0 +1,12 @@
+{
+  "name": "tui-launcher",
+  "label": "TUI",
+  "description": "Launch the modern Hermes TUI from the dashboard",
+  "icon": "Terminal",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/tui",
+    "position": "after:cron"
+  },
+  "entry": "dist/index.js"
+}
