@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Palette, Check } from "lucide-react";
+import { Palette, Check, MoonStar, SunMedium } from "lucide-react";
 import { Typography } from "@nous-research/ui";
 import { BUILTIN_THEMES, useTheme } from "@/themes";
 import { useI18n } from "@/i18n";
@@ -43,9 +43,55 @@ export function ThemeSwitcher() {
 
   const current = availableThemes.find((th) => th.name === themeName);
   const label = current?.label ?? themeName;
+  const isDarkActive = themeName === "hermes-green-dark";
+  const isLightActive = themeName === "hermes-light";
 
   return (
-    <div ref={wrapperRef} className="relative">
+    <div ref={wrapperRef} className="relative flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => setTheme("hermes-green-dark")}
+        className={cn(
+          "inline-flex items-center gap-1 border px-2 py-1 text-xs",
+          "transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
+          isDarkActive
+            ? "border-midground bg-midground text-background-base"
+            : "border-current/20 text-muted-foreground hover:text-foreground hover:bg-midground/10",
+        )}
+        title="Hermes Green Dark"
+        aria-label="Switch to Hermes Green Dark"
+        aria-pressed={isDarkActive}
+      >
+        <MoonStar className="h-3.5 w-3.5" />
+        <Typography
+          mondwest
+          className="hidden md:inline tracking-wide uppercase text-[0.65rem]"
+        >
+          Dark
+        </Typography>
+      </button>
+      <button
+        type="button"
+        onClick={() => setTheme("hermes-light")}
+        className={cn(
+          "inline-flex items-center gap-1 border px-2 py-1 text-xs",
+          "transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
+          isLightActive
+            ? "border-midground bg-midground text-background-base"
+            : "border-current/20 text-muted-foreground hover:text-foreground hover:bg-midground/10",
+        )}
+        title="Hermes Light"
+        aria-label="Switch to Hermes Light"
+        aria-pressed={isLightActive}
+      >
+        <SunMedium className="h-3.5 w-3.5" />
+        <Typography
+          mondwest
+          className="hidden md:inline tracking-wide uppercase text-[0.65rem]"
+        >
+          Light
+        </Typography>
+      </button>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

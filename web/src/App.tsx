@@ -265,13 +265,13 @@ export default function App() {
               </Cell>
 
               {navItems.map(({ path, label, labelKey, icon: Icon }) => (
-                <Cell key={path} className="relative !p-0">
+                <Cell key={path} className="relative min-w-max !p-0">
                   <NavLink
                     to={path}
                     end={path === "/"}
                     className={({ isActive }) =>
                       cn(
-                        "group relative flex h-full w-full items-center gap-1.5",
+                        "group relative flex h-full min-w-max w-full items-center gap-1.5",
                         "px-2.5 sm:px-4 py-2",
                         "font-mondwest text-[0.65rem] sm:text-[0.8rem] tracking-[0.12em]",
                         "whitespace-nowrap transition-colors cursor-pointer",

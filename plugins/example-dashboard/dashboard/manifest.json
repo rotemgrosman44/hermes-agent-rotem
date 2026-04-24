@@ -6,7 +6,8 @@
   "version": "1.0.0",
   "tab": {
     "path": "/example",
-    "position": "after:skills"
+    "position": "after:skills",
+    "hidden": true
   },
   "entry": "dist/index.js",
   "api": "plugin_api.py"

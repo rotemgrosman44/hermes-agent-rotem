@@ -1,0 +1,13 @@
+{
+  "name": "mad-hatter-dashboard",
+  "label": "Mad Hatter",
+  "description": "Hebrew ADHD-friendly control dashboard for Hermes Madhatter, WhatsApp, Twitter operator, and Jarvis boundaries",
+  "icon": "Heart",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/mad-hatter",
+    "position": "after:cron"
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
