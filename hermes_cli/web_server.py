@@ -2316,12 +2316,14 @@ def mount_spa(application: FastAPI):
 # Built-in dashboard themes — label + description only.  The actual color
 # definitions live in the frontend (web/src/themes/presets.ts).
 _BUILTIN_DASHBOARD_THEMES = [
-    {"name": "default",   "label": "Hermes Teal",  "description": "Classic dark teal — the canonical Hermes look"},
-    {"name": "midnight",  "label": "Midnight",      "description": "Deep blue-violet with cool accents"},
-    {"name": "ember",     "label": "Ember",          "description": "Warm crimson and bronze — forge vibes"},
-    {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
-    {"name": "cyberpunk", "label": "Cyberpunk",      "description": "Neon green on black — matrix terminal"},
-    {"name": "rose",      "label": "Rosé",           "description": "Soft pink and warm ivory — easy on the eyes"},
+    {"name": "default",            "label": "Hermes Teal",       "description": "Classic dark teal — the canonical Hermes look"},
+    {"name": "hermes-green-dark",  "label": "Hermes Green Dark", "description": "Readable green-on-teal dashboard for night use"},
+    {"name": "hermes-light",       "label": "Hermes Light",      "description": "Light readable dashboard with Hermes green accents"},
+    {"name": "midnight",           "label": "Midnight",          "description": "Deep blue-violet with cool accents"},
+    {"name": "ember",              "label": "Ember",             "description": "Warm crimson and bronze — forge vibes"},
+    {"name": "mono",               "label": "Mono",              "description": "Clean grayscale — minimal and focused"},
+    {"name": "cyberpunk",          "label": "Cyberpunk",         "description": "Neon green on black — matrix terminal"},
+    {"name": "rose",               "label": "Rosé",              "description": "Soft pink and warm ivory — easy on the eyes"},
 ]
 
 

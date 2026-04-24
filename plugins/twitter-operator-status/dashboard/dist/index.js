@@ -12,23 +12,43 @@
     return ok ? "default" : "destructive";
   }
 
+  const panelStyle = {
+    background: "color-mix(in srgb, var(--color-card) 94%, transparent)",
+    boxShadow: "0 18px 48px -36px var(--warm-glow)",
+  };
+
+  const fieldStyle = {
+    border: "1px solid var(--color-border)",
+    borderRadius: "calc(var(--theme-radius, 0.5rem) * 0.8)",
+    background: "color-mix(in srgb, var(--color-muted) 48%, transparent)",
+    padding: "0.75rem",
+  };
+
+  const rowStyle = {
+    borderTop: "1px solid var(--color-border)",
+  };
+
+  const tableHeaderStyle = {
+    color: "var(--color-muted-foreground)",
+  };
+
   function field(label, value) {
-    return React.createElement("div", { className: "flex min-w-0 flex-col gap-1" },
+    return React.createElement("div", { className: "flex min-w-0 flex-col gap-1", style: fieldStyle },
       React.createElement("span", { className: "text-xs text-muted-foreground" }, label),
-      React.createElement("span", { className: "truncate font-courier text-sm" }, value == null || value === "" ? "unknown" : String(value)),
+      React.createElement("span", { className: "truncate font-mono-ui text-sm text-card-foreground" }, value == null || value === "" ? "unknown" : String(value)),
     );
   }
 
   function JobRow(props) {
     const job = props.job;
-    return React.createElement("tr", { className: "border-t border-border" },
-      React.createElement("td", { className: "py-2 pr-3 font-courier text-sm" }, job.name || job.id || "job"),
-      React.createElement("td", { className: "py-2 pr-3 font-courier text-sm" }, job.schedule || "unknown"),
+    return React.createElement("tr", { style: rowStyle },
+      React.createElement("td", { className: "py-2 pr-3 font-mono-ui text-sm" }, job.name || job.id || "job"),
+      React.createElement("td", { className: "py-2 pr-3 font-mono-ui text-sm" }, job.schedule || "unknown"),
       React.createElement("td", { className: "py-2 pr-3" },
         React.createElement(Badge, { variant: job.enabled && job.state !== "paused" ? "default" : "outline" }, job.state || (job.enabled ? "active" : "disabled")),
       ),
-      React.createElement("td", { className: "py-2 pr-3 font-courier text-xs text-muted-foreground" }, job.next_run_at || "unknown"),
-      React.createElement("td", { className: "py-2 font-courier text-xs text-muted-foreground" }, job.last_run_at || "never"),
+      React.createElement("td", { className: "py-2 pr-3 font-mono-ui text-xs text-muted-foreground" }, job.next_run_at || "unknown"),
+      React.createElement("td", { className: "py-2 font-mono-ui text-xs text-muted-foreground" }, job.last_run_at || "never"),
     );
   }
 
@@ -68,11 +88,11 @@
         React.createElement(Button, { onClick: refresh, disabled: loading }, loading ? "Refreshing" : "Refresh"),
       ),
 
-      error && React.createElement(Card, null,
+      error && React.createElement(Card, { style: panelStyle },
         React.createElement(CardContent, { className: "pt-6 text-sm text-destructive" }, error),
       ),
 
-      React.createElement(Card, null,
+      React.createElement(Card, { style: panelStyle },
         React.createElement(CardHeader, null,
           React.createElement(CardTitle, null, "Runtime"),
         ),
@@ -88,7 +108,7 @@
         ),
       ),
 
-      React.createElement(Card, null,
+      React.createElement(Card, { style: panelStyle },
         React.createElement(CardHeader, null,
           React.createElement("div", { className: "flex items-center justify-between gap-3" },
             React.createElement(CardTitle, null, "Cron"),
@@ -99,7 +119,7 @@
           React.createElement("div", { className: "overflow-x-auto" },
             React.createElement("table", { className: "w-full min-w-[720px] text-left" },
               React.createElement("thead", null,
-                React.createElement("tr", { className: "text-xs text-muted-foreground" },
+                React.createElement("tr", { className: "text-xs", style: tableHeaderStyle },
                   React.createElement("th", { className: "pb-2 pr-3 font-normal" }, "Name"),
                   React.createElement("th", { className: "pb-2 pr-3 font-normal" }, "Schedule"),
                   React.createElement("th", { className: "pb-2 pr-3 font-normal" }, "State"),

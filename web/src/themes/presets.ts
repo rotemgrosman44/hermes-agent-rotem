@@ -53,6 +53,79 @@ export const defaultTheme: DashboardTheme = {
   layout: DEFAULT_LAYOUT,
 };
 
+export const hermesGreenDarkTheme: DashboardTheme = {
+  name: "hermes-green-dark",
+  label: "Hermes Green Dark",
+  description: "Readable green-on-teal dashboard for night use",
+  palette: {
+    background: { hex: "#062321", alpha: 1 },
+    midground: { hex: "#d7ffe8", alpha: 1 },
+    foreground: { hex: "#ffffff", alpha: 0 },
+    warmGlow: "rgba(34, 197, 94, 0.24)",
+    noiseOpacity: 0.85,
+  },
+  typography: {
+    ...DEFAULT_TYPOGRAPHY,
+    baseSize: "14px",
+    lineHeight: "1.58",
+    letterSpacing: "0",
+  },
+  layout: {
+    radius: "0.5rem",
+    density: "comfortable",
+  },
+  colorOverrides: {
+    success: "#22c55e",
+    warning: "#facc15",
+    destructive: "#ef4444",
+    ring: "#a7f3d0",
+  },
+};
+
+export const hermesLightTheme: DashboardTheme = {
+  name: "hermes-light",
+  label: "Hermes Light",
+  description: "Light readable dashboard with Hermes green accents",
+  palette: {
+    background: { hex: "#f5fbf7", alpha: 1 },
+    midground: { hex: "#064e3b", alpha: 1 },
+    foreground: { hex: "#ffffff", alpha: 0 },
+    warmGlow: "rgba(20, 184, 166, 0.18)",
+    noiseOpacity: 0.35,
+  },
+  typography: {
+    ...DEFAULT_TYPOGRAPHY,
+    baseSize: "14px",
+    lineHeight: "1.58",
+    letterSpacing: "0",
+  },
+  layout: {
+    radius: "0.5rem",
+    density: "comfortable",
+  },
+  colorOverrides: {
+    card: "#ffffff",
+    cardForeground: "#083c31",
+    popover: "#ffffff",
+    popoverForeground: "#083c31",
+    primary: "#047857",
+    primaryForeground: "#f7fffb",
+    secondary: "#dcefe7",
+    secondaryForeground: "#064e3b",
+    muted: "#e6f2ec",
+    mutedForeground: "#4b635b",
+    accent: "#d7f5e5",
+    accentForeground: "#064e3b",
+    destructive: "#dc2626",
+    destructiveForeground: "#ffffff",
+    success: "#15803d",
+    warning: "#b7791f",
+    border: "#b8d7ca",
+    input: "#a9cabe",
+    ring: "#0f766e",
+  },
+};
+
 export const midnightTheme: DashboardTheme = {
   name: "midnight",
   label: "Midnight",
@@ -194,6 +267,8 @@ export const roseTheme: DashboardTheme = {
 
 export const BUILTIN_THEMES: Record<string, DashboardTheme> = {
   default: defaultTheme,
+  "hermes-green-dark": hermesGreenDarkTheme,
+  "hermes-light": hermesLightTheme,
   midnight: midnightTheme,
   ember: emberTheme,
   mono: monoTheme,
