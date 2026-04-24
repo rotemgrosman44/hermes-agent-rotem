@@ -201,7 +201,7 @@ function buildRoutes(
 
 export default function App() {
   const { t } = useI18n();
-  const { plugins } = usePlugins();
+  const { plugins, loading: pluginsLoading } = usePlugins();
   const { theme } = useTheme();
 
   const navItems = useMemo(
@@ -376,7 +376,14 @@ export default function App() {
             {routes.map(({ key, path, Component }) => (
               <Route key={key} path={path} element={<Component />} />
             ))}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route
+              path="*"
+              element={
+                pluginsLoading
+                  ? <div className="min-h-[240px]" aria-hidden />
+                  : <Navigate to="/" replace />
+              }
+            />
           </Routes>
           <PluginSlot name="post-main" />
         </main>
