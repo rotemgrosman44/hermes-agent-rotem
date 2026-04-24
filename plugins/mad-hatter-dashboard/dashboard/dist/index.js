@@ -176,7 +176,6 @@
   function MadHatterPage() {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
-    const [restarting, setRestarting] = useState(false);
     const [action, setAction] = useState(null);
 
     function refresh() {
@@ -186,16 +185,11 @@
         .catch(function (err) { setError(err && err.message ? err.message : "status fetch failed"); });
     }
 
-    function restartHermes() {
-      setRestarting(true);
-      setAction(null);
-      SDK.api.restartGateway()
-        .then(function (result) { setAction("Hermes main restart started: pid " + result.pid); })
-        .catch(function (err) { setAction(err && err.message ? err.message : "restart failed"); })
-        .finally(function () {
-          setRestarting(false);
-          window.setTimeout(refresh, 1800);
-        });
+    function copyRestartCommand() {
+      const command = "systemctl --user restart hermes-gateway-madhatter.service";
+      navigator.clipboard.writeText(command)
+        .then(function () { setAction("Copied safe Hermes main restart command."); })
+        .catch(function () { setAction(command); });
     }
 
     useEffect(function () {
@@ -227,7 +221,7 @@
         ),
         React.createElement("div", { className: "mt-5 flex flex-wrap gap-3" },
           React.createElement(Button, { type: "button", onClick: refresh, variant: "outline" }, "Refresh"),
-          React.createElement(Button, { type: "button", onClick: restartHermes, disabled: restarting }, restarting ? "Restarting Hermes" : "Hermes only: restart main"),
+          React.createElement(Button, { type: "button", onClick: copyRestartCommand, variant: "outline" }, "Copy safe Hermes restart"),
           React.createElement("a", { href: "/twitter-operator" }, React.createElement(Button, { type: "button", variant: "outline" }, "Open Twitter Operator")),
           React.createElement("a", { href: "/" }, React.createElement(Button, { type: "button", variant: "outline" }, "Open Hermes Status")),
         ),

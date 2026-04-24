@@ -606,12 +606,22 @@ _ACTION_LOG_FILES: Dict[str, str] = {
 _ACTION_PROCS: Dict[str, subprocess.Popen] = {}
 
 
-def _spawn_hermes_action(subcommand: List[str], name: str) -> subprocess.Popen:
-    """Spawn ``hermes <subcommand>`` detached and record the Popen handle.
+def _action_env() -> Dict[str, str]:
+    env = {
+        **os.environ,
+        "HERMES_HOME": str(get_hermes_home()),
+        "HERMES_NONINTERACTIVE": "1",
+    }
+    if sys.platform != "win32":
+        xdg_runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
+        bus_path = Path(xdg_runtime_dir) / "bus"
+        if bus_path.exists() and not env.get("DBUS_SESSION_BUS_ADDRESS"):
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus_path}"
+    return env
 
-    Uses the running interpreter's ``hermes_cli.main`` module so the action
-    inherits the same venv/PYTHONPATH the web server is using.
-    """
+
+def _spawn_action_command(cmd: List[str], name: str) -> subprocess.Popen:
     log_file_name = _ACTION_LOG_FILES[name]
     _ACTION_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = _ACTION_LOG_DIR / log_file_name
@@ -619,15 +629,14 @@ def _spawn_hermes_action(subcommand: List[str], name: str) -> subprocess.Popen:
     log_file.write(
         f"\n=== {name} started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode()
     )
-
-    cmd = [sys.executable, "-m", "hermes_cli.main", *subcommand]
+    log_file.write((" ".join(cmd) + "\n").encode())
 
     popen_kwargs: Dict[str, Any] = {
         "cwd": str(PROJECT_ROOT),
         "stdin": subprocess.DEVNULL,
         "stdout": log_file,
         "stderr": subprocess.STDOUT,
-        "env": {**os.environ, "HERMES_NONINTERACTIVE": "1"},
+        "env": _action_env(),
     }
     if sys.platform == "win32":
         popen_kwargs["creationflags"] = (
@@ -640,6 +649,39 @@ def _spawn_hermes_action(subcommand: List[str], name: str) -> subprocess.Popen:
     proc = subprocess.Popen(cmd, **popen_kwargs)
     _ACTION_PROCS[name] = proc
     return proc
+
+
+def _spawn_hermes_action(subcommand: List[str], name: str) -> subprocess.Popen:
+    """Spawn ``hermes <subcommand>`` detached and record the Popen handle.
+
+    Uses the running interpreter's ``hermes_cli.main`` module so the action
+    inherits the same venv/PYTHONPATH the web server is using.
+    """
+    cmd = [sys.executable, "-m", "hermes_cli.main", *subcommand]
+    return _spawn_action_command(cmd, name)
+
+
+def _spawn_gateway_restart_action() -> subprocess.Popen:
+    """Restart the active gateway using its systemd unit when available."""
+    if sys.platform != "win32":
+        try:
+            from hermes_cli.gateway import get_service_name, get_systemd_unit_path
+
+            if get_systemd_unit_path(system=False).exists():
+                service_name = get_service_name()
+                script = (
+                    "import subprocess, sys\n"
+                    "svc = sys.argv[1]\n"
+                    "subprocess.run(['systemctl', '--user', 'reset-failed', svc], check=False)\n"
+                    "subprocess.run(['systemctl', '--user', 'restart', svc], check=True)\n"
+                )
+                return _spawn_action_command(
+                    [sys.executable, "-c", script, service_name],
+                    "gateway-restart",
+                )
+        except Exception:
+            _log.exception("Failed to spawn systemd gateway restart; falling back to CLI")
+    return _spawn_hermes_action(["gateway", "restart"], "gateway-restart")
 
 
 def _tail_lines(path: Path, n: int) -> List[str]:
@@ -660,7 +702,7 @@ def _tail_lines(path: Path, n: int) -> List[str]:
 async def restart_gateway():
     """Kick off a ``hermes gateway restart`` in the background."""
     try:
-        proc = _spawn_hermes_action(["gateway", "restart"], "gateway-restart")
+        proc = _spawn_gateway_restart_action()
     except Exception as exc:
         _log.exception("Failed to spawn gateway restart")
         raise HTTPException(status_code=500, detail=f"Failed to restart gateway: {exc}")
