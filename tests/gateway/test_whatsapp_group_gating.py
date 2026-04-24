@@ -5,7 +5,8 @@ from gateway.config import Platform, PlatformConfig, load_gateway_config
 
 
 def _make_adapter(require_mention=None, mention_patterns=None, free_response_chats=None,
-                  dm_policy=None, allow_from=None, group_policy=None, group_allow_from=None):
+                  free_response_group_users=None, dm_policy=None, allow_from=None,
+                  group_policy=None, group_allow_from=None):
     from gateway.platforms.whatsapp import WhatsAppAdapter
 
     extra = {}
@@ -15,6 +16,8 @@ def _make_adapter(require_mention=None, mention_patterns=None, free_response_cha
         extra["mention_patterns"] = mention_patterns
     if free_response_chats is not None:
         extra["free_response_chats"] = free_response_chats
+    if free_response_group_users is not None:
+        extra["free_response_group_users"] = free_response_group_users
     if dm_policy is not None:
         extra["dm_policy"] = dm_policy
     if allow_from is not None:
@@ -112,21 +115,31 @@ def test_config_bridges_whatsapp_group_settings(monkeypatch, tmp_path):
         "whatsapp:\n"
         "  require_mention: true\n"
         "  mention_patterns:\n"
-        "    - \"^\\\\s*chompy\\\\b\"\n",
+        "    - \"^\\\\s*chompy\\\\b\"\n"
+        "  free_response_group_users:\n"
+        "    \"120363001234567890@g.us\":\n"
+        "      - \"6281234567890\"\n",
         encoding="utf-8",
     )
 
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     monkeypatch.delenv("WHATSAPP_REQUIRE_MENTION", raising=False)
     monkeypatch.delenv("WHATSAPP_MENTION_PATTERNS", raising=False)
+    monkeypatch.delenv("WHATSAPP_FREE_RESPONSE_GROUP_USERS", raising=False)
 
     config = load_gateway_config()
 
     assert config is not None
     assert config.platforms[Platform.WHATSAPP].extra["require_mention"] is True
     assert config.platforms[Platform.WHATSAPP].extra["mention_patterns"] == [r"^\s*chompy\b"]
+    assert config.platforms[Platform.WHATSAPP].extra["free_response_group_users"] == {
+        "120363001234567890@g.us": ["6281234567890"],
+    }
     assert __import__("os").environ["WHATSAPP_REQUIRE_MENTION"] == "true"
     assert json.loads(__import__("os").environ["WHATSAPP_MENTION_PATTERNS"]) == [r"^\s*chompy\b"]
+    assert json.loads(__import__("os").environ["WHATSAPP_FREE_RESPONSE_GROUP_USERS"]) == {
+        "120363001234567890@g.us": ["6281234567890"],
+    }
 
 
 def test_free_response_chats_bypass_mention_gating():
@@ -145,6 +158,28 @@ def test_free_response_chats_does_not_bypass_other_groups():
     )
 
     assert adapter._should_process_message(_group_message("hello everyone")) is False
+
+
+def test_free_response_group_users_bypass_mention_for_allowed_sender():
+    adapter = _make_adapter(
+        require_mention=True,
+        free_response_group_users={"120363001234567890@g.us": ["6281234567890"]},
+    )
+
+    assert adapter._should_process_message(
+        _group_message("hello everyone", senderId="6281234567890@s.whatsapp.net")
+    ) is True
+
+
+def test_free_response_group_users_do_not_bypass_for_unlisted_sender():
+    adapter = _make_adapter(
+        require_mention=True,
+        free_response_group_users={"120363001234567890@g.us": ["6281234567890"]},
+    )
+
+    assert adapter._should_process_message(
+        _group_message("hello everyone", senderId="6289999999999@s.whatsapp.net")
+    ) is False
 
 
 def test_dm_passes_with_default_open_policy():

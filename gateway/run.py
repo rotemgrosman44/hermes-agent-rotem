@@ -288,6 +288,7 @@ from gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
     MessageType,
+    event_requests_outbound_voice,
     merge_pending_message_event,
 )
 from gateway.restart import (
@@ -6031,8 +6032,8 @@ class GatewayRunner:
                 self._set_adapter_auto_tts_disabled(adapter, chat_id, disabled=False)
             return (
                 "Voice mode enabled.\n"
-                "I'll reply with voice when you send voice messages.\n"
-                "Use /voice tts to get voice replies for all messages."
+                "Outbound voice still requires an explicit request like "
+                "'send a voice message' or 'שלח הודעה קולית'."
             )
         elif args in ("off", "disable"):
             self._voice_mode[voice_key] = "off"
@@ -6046,8 +6047,8 @@ class GatewayRunner:
             if adapter:
                 self._set_adapter_auto_tts_disabled(adapter, chat_id, disabled=False)
             return (
-                "Auto-TTS enabled.\n"
-                "All replies will include a voice message."
+                "Auto-TTS mode saved.\n"
+                "Safety gate remains active: voice is sent only after an explicit voice request."
             )
         elif args in ("channel", "join"):
             return await self._handle_voice_channel_join(event)
@@ -6245,27 +6246,20 @@ class GatewayRunner:
         """Decide whether the runner should send a TTS voice reply.
 
         Returns False when:
-        - voice_mode is off for this chat
         - response is empty or an error
+        - text has already been streamed to the user
+        - the latest user message did not explicitly ask for a voice note
         - agent already called text_to_speech tool (dedup)
         - voice input and base adapter auto-TTS already handled it (skip_double)
-          UNLESS streaming already consumed the response (already_sent=True),
-          in which case the base adapter won't have text for auto-TTS so the
-          runner must handle it.
         """
         if not response or response.startswith("Error:"):
             return False
-
-        chat_id = event.source.chat_id
-        voice_mode = self._voice_mode.get(self._voice_key(event.source.platform, chat_id), "off")
-        is_voice_input = (event.message_type == MessageType.VOICE)
-
-        should = (
-            (voice_mode == "all")
-            or (voice_mode == "voice_only" and is_voice_input)
-        )
-        if not should:
+        if already_sent:
             return False
+        if not event_requests_outbound_voice(event):
+            return False
+
+        is_voice_input = (event.message_type == MessageType.VOICE)
 
         # Dedup: agent already called TTS tool
         has_agent_tts = any(
@@ -6281,25 +6275,26 @@ class GatewayRunner:
 
         # Dedup: base adapter auto-TTS already handles voice input
         # (play_tts plays in VC when connected, so runner can skip).
-        # When streaming already delivered the text (already_sent=True),
-        # the base adapter will receive None and can't run auto-TTS,
-        # so the runner must take over.
-        if is_voice_input and not already_sent:
+        if is_voice_input:
             return False
 
         return True
 
-    async def _send_voice_reply(self, event: MessageEvent, text: str) -> None:
+    async def _send_voice_reply(self, event: MessageEvent, text: str) -> bool:
         """Generate TTS audio and send as a voice message before the text reply."""
         import uuid as _uuid
         audio_path = None
         actual_path = None
         try:
-            from tools.tts_tool import text_to_speech_tool, _strip_markdown_for_tts
+            from tools.tts_tool import (
+                _strip_markdown_for_tts,
+                is_speakable_tts_text,
+                text_to_speech_tool,
+            )
 
             tts_text = _strip_markdown_for_tts(text[:4000])
-            if not tts_text:
-                return
+            if not tts_text or not is_speakable_tts_text(tts_text):
+                return False
 
             # Use .mp3 extension so edge-tts conversion to opus works correctly.
             # The TTS tool may convert to .ogg — use file_path from result.
@@ -6318,7 +6313,7 @@ class GatewayRunner:
             actual_path = result.get("file_path", audio_path)
             if not result.get("success") or not os.path.isfile(actual_path):
                 logger.warning("Auto voice reply TTS failed: %s", result.get("error"))
-                return
+                return False
 
             adapter = self.adapters.get(event.source.platform)
 
@@ -6329,6 +6324,7 @@ class GatewayRunner:
                     and hasattr(adapter, "is_in_voice_channel")
                     and adapter.is_in_voice_channel(guild_id)):
                 await adapter.play_in_voice_channel(guild_id, actual_path)
+                return True
             elif adapter and hasattr(adapter, "send_voice"):
                 send_kwargs: Dict[str, Any] = {
                     "chat_id": event.source.chat_id,
@@ -6338,8 +6334,11 @@ class GatewayRunner:
                 if event.source.thread_id:
                     send_kwargs["metadata"] = {"thread_id": event.source.thread_id}
                 await adapter.send_voice(**send_kwargs)
+                return True
+            return False
         except Exception as e:
             logger.warning("Auto voice reply failed: %s", e, exc_info=True)
+            return False
         finally:
             for p in {audio_path, actual_path} - {None}:
                 try:
@@ -6371,11 +6370,19 @@ class GatewayRunner:
             _AUDIO_EXTS = {'.ogg', '.opus', '.mp3', '.wav', '.m4a'}
             _VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp'}
             _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+            voice_requested = event_requests_outbound_voice(event)
 
             for media_path, is_voice in media_files:
                 try:
                     ext = Path(media_path).suffix.lower()
                     if ext in _AUDIO_EXTS:
+                        if not voice_requested:
+                            logger.info(
+                                "[%s] Blocked post-stream outbound audio without explicit voice request: %s",
+                                adapter.name,
+                                media_path,
+                            )
+                            continue
                         await adapter.send_voice(
                             chat_id=event.source.chat_id,
                             audio_path=media_path,

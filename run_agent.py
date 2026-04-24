@@ -1054,6 +1054,10 @@ class AIAgent:
                     'hermes_cli',           # CLI helpers
                 ]:
                     logging.getLogger(quiet_logger).setLevel(logging.ERROR)
+                # Keep plugin safety warnings visible. Quiet mode is allowed
+                # to suppress routine CLI chatter, but manifest validation
+                # warnings must not disappear for the rest of the process.
+                logging.getLogger('hermes_cli.plugins').setLevel(logging.WARNING)
         
         # Internal stream callback (set during streaming TTS).
         # Initialized here so _vprint can reference it before run_conversation.

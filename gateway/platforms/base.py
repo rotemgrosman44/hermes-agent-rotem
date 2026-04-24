@@ -758,6 +758,40 @@ class MessageEvent:
         return args
 
 
+_OUTBOUND_VOICE_NEGATIVE_PATTERNS = (
+    r"\b(?:do not|don't|dont|no)\s+(?:send|reply|respond|record).{0,32}\b(?:voice|audio)\b",
+    r"\btext\s+only\b",
+    r"בלי\s+(?:קול|הודעה\s+קולית)",
+    r"טקסט\s+בלבד",
+    r"אל\s+(?:תשלח|תשלחי|תשלחו|תקליט|תקליטי|תקליטו).{0,24}(?:קול|קולית|הודעה\s+קולית)",
+    r"לא\s+(?:לשלוח|תשלח|תשלחי|תשלחו|להקליט|תקליט|תקליטי|תקליטו).{0,24}(?:קול|קולית|הודעה\s+קולית)",
+)
+
+_OUTBOUND_VOICE_REQUEST_PATTERNS = (
+    r"\b(?:send|record|reply|respond).{0,32}\b(?:voice|audio)\b",
+    r"\b(?:voice|audio)\s+(?:message|note|reply)\b",
+    r"(?:שלח|שלחי|שלחו|תשלח|תשלחי|תשלחו)\s*(?:לי|לנו)?\s*הודעה\s+קולית",
+    r"(?:הקלט|הקליטי|הקליטו|תקליט|תקליטי|תקליטו)\s*(?:לי|לנו|מחדש)?",
+    r"(?:ענה|תענה|תגיב|השב|תשיב)\s+בקול",
+    r"ב(?:הודעה\s+)?קולית",
+)
+
+
+def text_requests_outbound_voice(text: str) -> bool:
+    """Return True only when the user explicitly requested an outbound voice reply."""
+    normalized = re.sub(r"\s+", " ", str(text or "").lower()).strip()
+    if not normalized:
+        return False
+    if any(re.search(pattern, normalized) for pattern in _OUTBOUND_VOICE_NEGATIVE_PATTERNS):
+        return False
+    return any(re.search(pattern, normalized) for pattern in _OUTBOUND_VOICE_REQUEST_PATTERNS)
+
+
+def event_requests_outbound_voice(event: MessageEvent) -> bool:
+    """Check the latest inbound event for explicit outbound voice consent."""
+    return text_requests_outbound_voice(getattr(event, "text", "") or "")
+
+
 @dataclass 
 class SendResult:
     """Result of sending a message."""
@@ -2110,25 +2144,34 @@ class BasePlatformAdapter(ABC):
                 if local_files:
                     logger.info("[%s] extract_local_files found %d file(s) in response", self.name, len(local_files))
                 
-                # Auto-TTS: if voice message, generate audio FIRST (before sending text)
-                # Skipped when the chat has voice mode disabled (/voice off)
+                # Auto-TTS is opt-in only. Dictated/voice input still receives
+                # text unless the latest user message explicitly asks for a
+                # voice note ("send a voice message", "תקליט", etc.).
                 _tts_path = None
+                suppress_text_for_audio = False
+                voice_requested = event_requests_outbound_voice(event)
                 if (event.message_type == MessageType.VOICE
                         and text_content
                         and not media_files
-                        and event.source.chat_id not in self._auto_tts_disabled_chats):
+                        and event.source.chat_id not in self._auto_tts_disabled_chats
+                        and voice_requested):
                     try:
-                        from tools.tts_tool import text_to_speech_tool, check_tts_requirements
+                        from tools.tts_tool import (
+                            check_tts_requirements,
+                            is_speakable_tts_text,
+                            text_to_speech_tool,
+                        )
                         if check_tts_requirements():
                             import json as _json
                             speech_text = re.sub(r'[*_`#\[\]()]', '', text_content)[:4000].strip()
                             if not speech_text:
                                 raise ValueError("Empty text after markdown cleanup")
-                            tts_result_str = await asyncio.to_thread(
-                                text_to_speech_tool, text=speech_text
-                            )
-                            tts_data = _json.loads(tts_result_str)
-                            _tts_path = tts_data.get("file_path")
+                            if is_speakable_tts_text(speech_text):
+                                tts_result_str = await asyncio.to_thread(
+                                    text_to_speech_tool, text=speech_text
+                                )
+                                tts_data = _json.loads(tts_result_str)
+                                _tts_path = tts_data.get("file_path")
                     except Exception as tts_err:
                         logger.warning("[%s] Auto-TTS failed: %s", self.name, tts_err)
 
@@ -2140,13 +2183,31 @@ class BasePlatformAdapter(ABC):
                             audio_path=_tts_path,
                             metadata=_thread_metadata,
                         )
+                        # For chat platforms, a spoken reply should feel native.
+                        # When TTS was already sent, suppress redundant text.
+                        suppress_text_for_audio = True
                     finally:
                         try:
                             os.remove(_tts_path)
                         except OSError:
                             pass
 
+                # Human-like pacing delay between text and media
+                human_delay = self._get_human_delay()
+
+                _AUDIO_EXTS = {'.ogg', '.opus', '.mp3', '.wav', '.m4a'}
+                _VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp'}
+                _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+
+                if media_files:
+                    audio_only_media = all(Path(media_path).suffix.lower() in _AUDIO_EXTS for media_path, _ in media_files)
+                    if audio_only_media and voice_requested:
+                        suppress_text_for_audio = True
+
                 # Send the text portion
+                if suppress_text_for_audio:
+                    text_content = ""
+
                 if text_content:
                     logger.info("[%s] Sending response (%d chars) to %s", self.name, len(text_content), event.source.chat_id)
                     result = await self._send_with_retry(
@@ -2156,9 +2217,6 @@ class BasePlatformAdapter(ABC):
                         metadata=_thread_metadata,
                     )
                     _record_delivery(result)
-
-                # Human-like pacing delay between text and media
-                human_delay = self._get_human_delay()
 
                 # Send extracted images as native attachments
                 if images:
@@ -2194,16 +2252,19 @@ class BasePlatformAdapter(ABC):
                         logger.error("[%s] Error sending image: %s", self.name, img_err, exc_info=True)
 
                 # Send extracted media files — route by file type
-                _AUDIO_EXTS = {'.ogg', '.opus', '.mp3', '.wav', '.m4a'}
-                _VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp'}
-                _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
-
                 for media_path, is_voice in media_files:
                     if human_delay > 0:
                         await asyncio.sleep(human_delay)
                     try:
                         ext = Path(media_path).suffix.lower()
                         if ext in _AUDIO_EXTS:
+                            if not voice_requested:
+                                logger.info(
+                                    "[%s] Blocked outbound audio media without explicit voice request: %s",
+                                    self.name,
+                                    media_path,
+                                )
+                                continue
                             media_result = await self.send_voice(
                                 chat_id=event.source.chat_id,
                                 audio_path=media_path,

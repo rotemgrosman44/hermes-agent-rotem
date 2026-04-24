@@ -574,6 +574,8 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["require_mention"] = platform_cfg["require_mention"]
                 if "free_response_channels" in platform_cfg:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
+                if plat == Platform.WHATSAPP and "free_response_group_users" in platform_cfg:
+                    bridged["free_response_group_users"] = platform_cfg["free_response_group_users"]
                 if "mention_patterns" in platform_cfg:
                     bridged["mention_patterns"] = platform_cfg["mention_patterns"]
                 if "dm_policy" in platform_cfg:
@@ -709,6 +711,9 @@ def load_gateway_config() -> GatewayConfig:
                     if isinstance(frc, list):
                         frc = ",".join(str(v) for v in frc)
                     os.environ["WHATSAPP_FREE_RESPONSE_CHATS"] = str(frc)
+                frgu = whatsapp_cfg.get("free_response_group_users")
+                if frgu is not None and not os.getenv("WHATSAPP_FREE_RESPONSE_GROUP_USERS"):
+                    os.environ["WHATSAPP_FREE_RESPONSE_GROUP_USERS"] = json.dumps(frgu)
                 if "dm_policy" in whatsapp_cfg and not os.getenv("WHATSAPP_DM_POLICY"):
                     os.environ["WHATSAPP_DM_POLICY"] = str(whatsapp_cfg["dm_policy"]).lower()
                 af = whatsapp_cfg.get("allow_from")

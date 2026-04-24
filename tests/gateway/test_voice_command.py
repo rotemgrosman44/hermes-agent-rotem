@@ -248,7 +248,7 @@ class TestAutoVoiceReply:
         else:
             runner._voice_mode.pop("telegram:" + chat_id, None)
 
-        event = _make_event(message_type=message_type)
+        event = _make_event(text="send a voice message", message_type=message_type)
 
         if in_voice_channel:
             mock_adapter = MagicMock()
@@ -298,21 +298,22 @@ class TestAutoVoiceReply:
 
     # -- Text input: only runner handles -----------------------------------
 
-    def test_text_input_all_mode_runner_fires(self, runner):
-        """all + text input: only runner fires (base auto-TTS only for voice)."""
+    def test_text_input_explicit_voice_request_runner_fires(self, runner):
+        """Text input with an explicit voice request fires the runner TTS path."""
         assert self._call(runner, "all", MessageType.TEXT) is True
 
-    def test_text_input_voice_only_no_reply(self, runner):
-        """voice_only + text input: neither fires."""
-        assert self._call(runner, "voice_only", MessageType.TEXT) is False
+    def test_text_input_without_explicit_voice_request_no_reply(self, runner):
+        """Text input without explicit voice consent stays text-only."""
+        event = _make_event(text="regular text", message_type=MessageType.TEXT)
+        assert runner._should_send_voice_reply(event, "Hello!", []) is False
 
-    # -- Mode off: nothing fires -------------------------------------------
+    # -- Mode off: explicit consent can still fire runner TTS --------------
 
     def test_off_mode_voice(self, runner):
         assert self._call(runner, "off", MessageType.VOICE) is False
 
     def test_off_mode_text(self, runner):
-        assert self._call(runner, "off", MessageType.TEXT) is False
+        assert self._call(runner, "off", MessageType.TEXT) is True
 
     # -- Discord VC exception: runner must handle --------------------------
 
@@ -354,6 +355,10 @@ class TestAutoVoiceReply:
             }],
         }]
         assert self._call(runner, "all", MessageType.TEXT, agent_messages=messages) is True
+
+    def test_already_sent_skips_runner_voice(self, runner):
+        event = _make_event(text="send a voice message", message_type=MessageType.TEXT)
+        assert runner._should_send_voice_reply(event, "Hello!", [], already_sent=True) is False
 
 
 # =====================================================================
@@ -2542,7 +2547,8 @@ class TestVoiceTTSPlayback:
         return runner
 
     def _call_should_reply(self, runner, voice_mode, msg_type, response="Hello",
-                           agent_msgs=None, already_sent=False):
+                           agent_msgs=None, already_sent=False,
+                           text="send a voice message"):
         from gateway.platforms.base import MessageType, MessageEvent, SessionSource
         from gateway.config import Platform
         runner._voice_mode["discord:ch1"] = voice_mode
@@ -2550,7 +2556,7 @@ class TestVoiceTTSPlayback:
             platform=Platform.DISCORD, chat_id="ch1",
             user_id="1", user_name="test", chat_type="channel",
         )
-        event = MessageEvent(source=source, text="test", message_type=msg_type)
+        event = MessageEvent(source=source, text=text, message_type=msg_type)
         return runner._should_send_voice_reply(
             event, response, agent_msgs or [], already_sent=already_sent,
         )
@@ -2570,16 +2576,16 @@ class TestVoiceTTSPlayback:
         assert self._call_should_reply(runner, "all", MessageType.TEXT, already_sent=False) is True
 
     def test_text_input_voice_off_no_tts(self):
-        """Streaming OFF + text input + voice_mode=off: no TTS."""
+        """Streaming OFF + text input without explicit consent: no TTS."""
         from gateway.platforms.base import MessageType
         runner = self._make_runner()
-        assert self._call_should_reply(runner, "off", MessageType.TEXT) is False
+        assert self._call_should_reply(runner, "off", MessageType.TEXT, text="regular text") is False
 
     def test_text_input_voice_only_no_tts(self):
-        """Streaming OFF + text input + voice_mode=voice_only: no TTS for text."""
+        """Streaming OFF + text input without explicit consent: no TTS for text."""
         from gateway.platforms.base import MessageType
         runner = self._make_runner()
-        assert self._call_should_reply(runner, "voice_only", MessageType.TEXT) is False
+        assert self._call_should_reply(runner, "voice_only", MessageType.TEXT, text="regular text") is False
 
     def test_error_response_no_tts(self):
         """Error response: no TTS regardless of voice_mode."""
@@ -2605,16 +2611,16 @@ class TestVoiceTTSPlayback:
     # -- Streaming ON (already_sent=True) --
 
     def test_streaming_on_voice_input_runner_fires(self):
-        """Streaming ON + voice input: runner handles TTS (base adapter has no text)."""
+        """Streaming ON + voice input: runner does not duplicate TTS after text streaming."""
         from gateway.platforms.base import MessageType
         runner = self._make_runner()
-        assert self._call_should_reply(runner, "all", MessageType.VOICE, already_sent=True) is True
+        assert self._call_should_reply(runner, "all", MessageType.VOICE, already_sent=True) is False
 
     def test_streaming_on_text_input_runner_fires(self):
-        """Streaming ON + text input: runner handles TTS (same as before)."""
+        """Streaming ON + text input: runner does not add audio after text streaming."""
         from gateway.platforms.base import MessageType
         runner = self._make_runner()
-        assert self._call_should_reply(runner, "all", MessageType.TEXT, already_sent=True) is True
+        assert self._call_should_reply(runner, "all", MessageType.TEXT, already_sent=True) is False
 
     def test_streaming_on_voice_off_no_tts(self):
         """Streaming ON + voice_mode=off: no TTS regardless of streaming."""

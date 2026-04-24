@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Callable, Dict, Any, Optional
@@ -1236,6 +1237,19 @@ def _strip_markdown_for_tts(text: str) -> str:
     text = _MD_HR.sub('', text)
     text = _MD_EXCESS_NL.sub('\n\n', text)
     return text.strip()
+
+
+def is_speakable_tts_text(text: str) -> bool:
+    """Return True only when text contains letters or numbers worth speaking."""
+    if not text:
+        return False
+    cleaned = _strip_markdown_for_tts(text)
+    cleaned = cleaned.replace("[[audio_as_voice]]", "")
+    cleaned = re.sub(r"MEDIA:\s*\S+", " ", cleaned)
+    for char in cleaned.strip():
+        if unicodedata.category(char)[0] in {"L", "N"}:
+            return True
+    return False
 
 
 def stream_tts_to_speaker(

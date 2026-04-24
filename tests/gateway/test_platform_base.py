@@ -8,7 +8,9 @@ from gateway.platforms.base import (
     GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE,
     MessageEvent,
     MessageType,
+    event_requests_outbound_voice,
     safe_url_for_log,
+    text_requests_outbound_voice,
     utf16_len,
     _prefix_within_utf16_limit,
 )
@@ -115,6 +117,24 @@ class TestMessageEventGetCommandArgs:
     def test_not_a_command_returns_full_text(self):
         event = MessageEvent(text="hello world")
         assert event.get_command_args() == "hello world"
+
+
+class TestOutboundVoiceConsent:
+    def test_english_voice_request(self):
+        assert text_requests_outbound_voice("please send a voice message") is True
+
+    def test_hebrew_voice_request(self):
+        assert text_requests_outbound_voice("שלח לי הודעה קולית") is True
+
+    def test_negative_request_blocks_voice(self):
+        assert text_requests_outbound_voice("do not send a voice message, text only") is False
+
+    def test_regular_text_is_not_voice_consent(self):
+        assert text_requests_outbound_voice("summarize this in text") is False
+
+    def test_event_voice_consent_uses_event_text(self):
+        event = MessageEvent(text="תקליט לי תשובה", message_type=MessageType.TEXT)
+        assert event_requests_outbound_voice(event) is True
 
 
 # ---------------------------------------------------------------------------
@@ -581,4 +601,3 @@ class TestTruncateMessageUtf16:
             assert fence_count % 2 == 0, (
                 f"Chunk {i} has unbalanced fences ({fence_count})"
             )
-
