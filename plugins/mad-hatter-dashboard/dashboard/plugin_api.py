@@ -151,7 +151,7 @@ def _office_status() -> dict[str, Any]:
         "office_running": office_running,
         "adapter_running": adapter_running,
         "ready": office_running and adapter_running,
-        "note_he": "הקאנבן עצמו רץ ב-Hermes Office/Claw3D. ה-WebUI נותן שער נוח בלי להזיז את WhatsApp bridge שעל פורט 3000.",
+        "note_he": "ב-v0.13 הקאנבן הרשמי נמצא ב-Web Dashboard על /kanban. Office/Claw3D נשאר ממשק ויזואלי משני ולא מקור האמת.",
         "commands": [
             {
                 "label_he": "הפעל Hermes Office adapter",

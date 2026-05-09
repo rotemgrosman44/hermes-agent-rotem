@@ -232,6 +232,7 @@
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [action, setAction] = useState(null);
+    const [selectedAgent, setSelectedAgent] = useState("all");
 
     function refresh() {
       setError(null);
@@ -261,6 +262,13 @@
       const officeOk = data && data.office && data.office.ready;
       return { mainOk, operatorOk, facebookOk, cronOk, officeOk };
     }, [data]);
+    const agentItems = useMemo(function () {
+      if (!data) return [];
+      return [data.main, data.operator, data.facebook].filter(Boolean);
+    }, [data]);
+    const visibleAgents = selectedAgent === "all"
+      ? agentItems
+      : agentItems.filter(function (item) { return item.id === selectedAgent; });
 
     return React.createElement("div", { className: "flex flex-col gap-6" },
       React.createElement("section", { className: "p-5", style: panelStyle },
@@ -281,20 +289,43 @@
         React.createElement("div", { className: "mt-5 flex flex-wrap gap-3" },
           React.createElement(Button, { type: "button", onClick: refresh, variant: "outline" }, "Refresh"),
           React.createElement(Button, { type: "button", onClick: copyRestartCommand, variant: "outline" }, "Copy safe Hermes restart"),
-          data && data.office ? React.createElement("a", { href: data.office.office_url, target: "_blank", rel: "noreferrer" }, React.createElement(Button, { type: "button", variant: "outline" }, "Open Kanban / Office")) : null,
+          React.createElement("a", { href: "/kanban" }, React.createElement(Button, { type: "button", variant: "outline" }, "Open official Kanban")),
+          data && data.office ? React.createElement("a", { href: data.office.office_url, target: "_blank", rel: "noreferrer" }, React.createElement(Button, { type: "button", variant: "outline" }, "Open Office / Claw3D")) : null,
           React.createElement("a", { href: "/twitter-operator" }, React.createElement(Button, { type: "button", variant: "outline" }, "Open Twitter Operator")),
           React.createElement("a", { href: "/" }, React.createElement(Button, { type: "button", variant: "outline" }, "Open Hermes Status")),
         ),
+        data ? React.createElement("label", {
+          className: "mt-4 flex max-w-sm flex-col gap-2 text-right text-sm font-semibold",
+          dir: "rtl",
+        },
+          "בחירת סוכן / runtime",
+          React.createElement("select", {
+            value: selectedAgent,
+            onChange: function (event) { setSelectedAgent(event.target.value); },
+            className: "w-full border bg-transparent px-3 py-2 font-mono-ui text-sm normal-case tracking-normal",
+            dir: "ltr",
+            style: {
+              borderColor: "var(--color-border)",
+              color: "var(--color-card-foreground)",
+              background: "color-mix(in srgb, var(--color-card) 78%, var(--color-muted))",
+            },
+          },
+            React.createElement("option", { value: "all" }, "All Hermes runtimes"),
+            agentItems.map(function (item) {
+              return React.createElement("option", { key: item.id, value: item.id }, item.label_he + " / " + item.label);
+            }),
+          ),
+        ) : null,
         action ? React.createElement("div", { className: "mt-3 text-sm text-muted-foreground" }, action) : null,
         error ? React.createElement("div", { className: "mt-3 text-sm text-destructive" }, error) : null,
       ),
       data ? React.createElement("div", { className: "grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" },
-        React.createElement(ServiceCard, { item: data.main }),
-        React.createElement(ServiceCard, { item: data.operator }),
-        data.facebook ? React.createElement(ServiceCard, { item: data.facebook }) : null,
+        visibleAgents.map(function (item) {
+          return React.createElement(ServiceCard, { key: item.id, item: item });
+        }),
       ) : null,
-      data ? React.createElement(OfficeCard, { item: data.office }) : null,
-      data ? React.createElement(JarvisCard, { item: data.jarvis }) : null,
+      data && selectedAgent === "all" ? React.createElement(OfficeCard, { item: data.office }) : null,
+      data && selectedAgent === "all" ? React.createElement(JarvisCard, { item: data.jarvis }) : null,
     );
   }
 

@@ -1214,10 +1214,19 @@ def run_doctor(args):
                 if base_url_host_matches(_base, "api.kimi.com") and _base.rstrip("/").endswith("/coding"):
                     _base = _base.rstrip("/") + "/v1"
                 _url = (_base.rstrip("/") + "/models") if _base else _default_url
-                _headers = {
-                    "Authorization": f"Bearer {_key}",
-                    "User-Agent": _HERMES_USER_AGENT,
-                }
+                if _pname == "Google AI Studio" or (
+                    isinstance(_url, str)
+                    and "generativelanguage.googleapis.com" in _url
+                ):
+                    _headers = {
+                        "x-goog-api-key": _key,
+                        "User-Agent": _HERMES_USER_AGENT,
+                    }
+                else:
+                    _headers = {
+                        "Authorization": f"Bearer {_key}",
+                        "User-Agent": _HERMES_USER_AGENT,
+                    }
                 if base_url_host_matches(_base, "api.kimi.com"):
                     _headers["User-Agent"] = "claude-code/0.1.0"
                 _resp = httpx.get(
