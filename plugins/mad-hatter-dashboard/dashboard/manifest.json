@@ -1,0 +1,13 @@
+{
+  "name": "mad-hatter-dashboard",
+  "label": "סוכנים",
+  "description": "Hebrew control dashboard for Hermes Madhatter, social operators, and Jarvis boundaries",
+  "icon": "Heart",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/mad-hatter",
+    "position": "before:cron"
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

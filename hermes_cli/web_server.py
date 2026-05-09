@@ -3433,6 +3433,7 @@ def mount_spa(application: FastAPI):
 _BUILTIN_DASHBOARD_THEMES = [
     {"name": "default",       "label": "Hermes Teal",         "description": "Classic dark teal — the canonical Hermes look"},
     {"name": "default-large", "label": "Hermes Teal (Large)", "description": "Hermes Teal with bigger fonts and roomier spacing"},
+    {"name": "reader-light",  "label": "Reader Light",        "description": "Warm off-white and brown — high-readability laptop mode"},
     {"name": "midnight",      "label": "Midnight",            "description": "Deep blue-violet with cool accents"},
     {"name": "ember",     "label": "Ember",          "description": "Warm crimson and bronze — forge vibes"},
     {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
@@ -3468,8 +3469,8 @@ def _parse_theme_layer(value: Any, default_hex: str, default_alpha: float = 1.0)
 _THEME_DEFAULT_TYPOGRAPHY: Dict[str, str] = {
     "fontSans": 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
     "fontMono": 'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace',
-    "baseSize": "15px",
-    "lineHeight": "1.55",
+    "baseSize": "17px",
+    "lineHeight": "1.65",
     "letterSpacing": "0",
 }
 

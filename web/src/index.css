@@ -49,16 +49,16 @@
   --foreground: color-mix(in srgb, #ffffff 0%, transparent);
   --foreground-base: #ffffff;
   --foreground-alpha: 0;
-  --midground: color-mix(in srgb, #ffe6cb 100%, transparent);
-  --midground-base: #ffe6cb;
+  --midground: color-mix(in srgb, #fff3dc 100%, transparent);
+  --midground-base: #fff3dc;
   --midground-alpha: 1;
-  --background: color-mix(in srgb, #041c1c 100%, transparent);
-  --background-base: #041c1c;
+  --background: color-mix(in srgb, #0d3532 100%, transparent);
+  --background-base: #0d3532;
   --background-alpha: 1;
 
   /* Consumed by <Backdrop />; also theme-switchable. */
-  --warm-glow: rgba(255, 189, 56, 0.35);
-  --noise-opacity-mul: 1;
+  --warm-glow: rgba(255, 205, 104, 0.28);
+  --noise-opacity-mul: 0.72;
 
   /* Typography tokens — rewritten by ThemeProvider. Defaults match the
      system stack so themes that don't override look native. */
@@ -67,8 +67,8 @@
   --theme-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo,
     Consolas, monospace;
   --theme-font-display: var(--theme-font-sans);
-  --theme-base-size: 15px;
-  --theme-line-height: 1.55;
+  --theme-base-size: 17px;
+  --theme-line-height: 1.65;
   --theme-letter-spacing: 0;
 
   /* Layout tokens. */
@@ -122,6 +122,11 @@ code, kbd, pre, samp, .font-mono, .font-mono-ui {
 small { font-size: 1.0625rem; }
 code { font-size: 0.875rem; }
 
+/* Accessibility: keep dashboard labels readable on laptop screens. */
+#root [class*="tracking-"] {
+  letter-spacing: var(--theme-letter-spacing) !important;
+}
+
 /* Shadcn-compat tokens.
    The dashboard's page code predates the Nous DS and uses shadcn-style
    utility classes (bg-card, text-muted-foreground, border-border, etc.)
@@ -132,24 +137,24 @@ code { font-size: 0.875rem; }
      stay visible — in LENS_0, `--foreground` itself has alpha 0. */
   --color-foreground: var(--midground);
 
-  --color-card: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+  --color-card: color-mix(in srgb, var(--midground-base) 8%, var(--background-base));
   --color-card-foreground: var(--midground);
   --color-primary: var(--midground);
   --color-primary-foreground: var(--background-base);
-  --color-secondary: color-mix(in srgb, var(--midground-base) 6%, var(--background-base));
+  --color-secondary: color-mix(in srgb, var(--midground-base) 12%, var(--background-base));
   --color-secondary-foreground: var(--midground);
-  --color-muted: color-mix(in srgb, var(--midground-base) 8%, var(--background-base));
-  --color-muted-foreground: color-mix(in srgb, var(--midground-base) 55%, transparent);
-  --color-accent: color-mix(in srgb, var(--midground-base) 10%, var(--background-base));
+  --color-muted: color-mix(in srgb, var(--midground-base) 12%, var(--background-base));
+  --color-muted-foreground: color-mix(in srgb, var(--midground-base) 76%, transparent);
+  --color-accent: color-mix(in srgb, var(--midground-base) 16%, var(--background-base));
   --color-accent-foreground: var(--midground);
   --color-destructive: #fb2c36;
   --color-destructive-foreground: #ffffff;
   --color-success: #4ade80;
   --color-warning: #ffbd38;
-  --color-border: color-mix(in srgb, var(--midground-base) 15%, transparent);
-  --color-input: color-mix(in srgb, var(--midground-base) 15%, transparent);
+  --color-border: color-mix(in srgb, var(--midground-base) 28%, transparent);
+  --color-input: color-mix(in srgb, var(--midground-base) 30%, transparent);
   --color-ring: var(--midground);
-  --color-popover: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+  --color-popover: color-mix(in srgb, var(--midground-base) 10%, var(--background-base));
   --color-popover-foreground: var(--midground);
 
   --radius-sm: calc(var(--theme-radius) - 4px);
@@ -226,4 +231,3 @@ code { font-size: 0.875rem; }
 :root[style*="--theme-asset-bg:"] .theme-default-filler {
   display: none;
 }
-

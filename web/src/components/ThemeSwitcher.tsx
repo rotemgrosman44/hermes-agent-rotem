@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Palette, Check } from "lucide-react";
+import { Palette, Check, Moon, Sun } from "lucide-react";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { ListItem } from "@nous-research/ui/ui/components/list-item";
 import { Typography } from "@/components/NouiTypography";
@@ -50,9 +50,26 @@ export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
 
   const current = availableThemes.find((th) => th.name === themeName);
   const label = current?.label ?? themeName;
+  const isReaderLight = themeName === "reader-light";
+  const quickModeLabel = isReaderLight ? "Dark mode" : "Reader light mode";
 
   return (
-    <div ref={wrapperRef} className="relative">
+    <div ref={wrapperRef} className="relative flex items-center gap-1">
+      <Button
+        ghost
+        onClick={() => setTheme(isReaderLight ? "default-large" : "reader-light")}
+        className="px-2 py-1 normal-case tracking-normal font-normal text-xs text-muted-foreground hover:text-foreground"
+        title={quickModeLabel}
+        aria-label={quickModeLabel}
+        aria-pressed={isReaderLight}
+      >
+        {isReaderLight ? (
+          <Moon className="h-3.5 w-3.5" />
+        ) : (
+          <Sun className="h-3.5 w-3.5" />
+        )}
+      </Button>
+
       <Button
         ghost
         onClick={() => setOpen((o) => !o)}
@@ -67,7 +84,7 @@ export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
 
           <Typography
             mondwest
-            className="hidden sm:inline tracking-wide uppercase text-[0.65rem]"
+            className="hidden sm:inline tracking-normal uppercase text-[0.7rem]"
           >
             {label}
           </Typography>

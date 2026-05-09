@@ -24,8 +24,8 @@ const SYSTEM_MONO =
 const DEFAULT_TYPOGRAPHY: ThemeTypography = {
   fontSans: SYSTEM_SANS,
   fontMono: SYSTEM_MONO,
-  baseSize: "15px",
-  lineHeight: "1.55",
+  baseSize: "17px",
+  lineHeight: "1.65",
   letterSpacing: "0",
 };
 
@@ -43,11 +43,11 @@ export const defaultTheme: DashboardTheme = {
   label: "Hermes Teal",
   description: "Classic dark teal — the canonical Hermes look",
   palette: {
-    background: { hex: "#041c1c", alpha: 1 },
-    midground: { hex: "#ffe6cb", alpha: 1 },
+    background: { hex: "#0d3532", alpha: 1 },
+    midground: { hex: "#fff3dc", alpha: 1 },
     foreground: { hex: "#ffffff", alpha: 0 },
-    warmGlow: "rgba(255, 189, 56, 0.35)",
-    noiseOpacity: 1,
+    warmGlow: "rgba(255, 205, 104, 0.28)",
+    noiseOpacity: 0.72,
   },
   typography: DEFAULT_TYPOGRAPHY,
   layout: DEFAULT_LAYOUT,
@@ -58,11 +58,11 @@ export const midnightTheme: DashboardTheme = {
   label: "Midnight",
   description: "Deep blue-violet with cool accents",
   palette: {
-    background: { hex: "#0a0a1f", alpha: 1 },
-    midground: { hex: "#d4c8ff", alpha: 1 },
+    background: { hex: "#171d3a", alpha: 1 },
+    midground: { hex: "#f0eaff", alpha: 1 },
     foreground: { hex: "#ffffff", alpha: 0 },
-    warmGlow: "rgba(167, 139, 250, 0.32)",
-    noiseOpacity: 0.8,
+    warmGlow: "rgba(167, 139, 250, 0.24)",
+    noiseOpacity: 0.55,
   },
   typography: {
     ...DEFAULT_TYPOGRAPHY,
@@ -70,7 +70,7 @@ export const midnightTheme: DashboardTheme = {
     fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
     fontUrl:
       "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
-    letterSpacing: "-0.005em",
+    letterSpacing: "0",
   },
   layout: {
     ...DEFAULT_LAYOUT,
@@ -83,11 +83,11 @@ export const emberTheme: DashboardTheme = {
   label: "Ember",
   description: "Warm crimson and bronze — forge vibes",
   palette: {
-    background: { hex: "#1a0a06", alpha: 1 },
-    midground: { hex: "#ffd8b0", alpha: 1 },
+    background: { hex: "#2b160f", alpha: 1 },
+    midground: { hex: "#ffead4", alpha: 1 },
     foreground: { hex: "#ffffff", alpha: 0 },
-    warmGlow: "rgba(249, 115, 22, 0.38)",
-    noiseOpacity: 1,
+    warmGlow: "rgba(249, 130, 42, 0.26)",
+    noiseOpacity: 0.65,
   },
   typography: {
     ...DEFAULT_TYPOGRAPHY,
@@ -111,11 +111,11 @@ export const monoTheme: DashboardTheme = {
   label: "Mono",
   description: "Clean grayscale — minimal and focused",
   palette: {
-    background: { hex: "#0e0e0e", alpha: 1 },
-    midground: { hex: "#eaeaea", alpha: 1 },
+    background: { hex: "#1b1b1b", alpha: 1 },
+    midground: { hex: "#f4f4f4", alpha: 1 },
     foreground: { hex: "#ffffff", alpha: 0 },
-    warmGlow: "rgba(255, 255, 255, 0.1)",
-    noiseOpacity: 0.6,
+    warmGlow: "rgba(255, 255, 255, 0.08)",
+    noiseOpacity: 0.36,
   },
   typography: {
     ...DEFAULT_TYPOGRAPHY,
@@ -135,11 +135,11 @@ export const cyberpunkTheme: DashboardTheme = {
   label: "Cyberpunk",
   description: "Neon green on black — matrix terminal",
   palette: {
-    background: { hex: "#040608", alpha: 1 },
-    midground: { hex: "#9bffcf", alpha: 1 },
+    background: { hex: "#0b1714", alpha: 1 },
+    midground: { hex: "#caffdf", alpha: 1 },
     foreground: { hex: "#ffffff", alpha: 0 },
-    warmGlow: "rgba(0, 255, 136, 0.22)",
-    noiseOpacity: 1.2,
+    warmGlow: "rgba(42, 255, 166, 0.18)",
+    noiseOpacity: 0.65,
   },
   typography: {
     ...DEFAULT_TYPOGRAPHY,
@@ -164,11 +164,11 @@ export const roseTheme: DashboardTheme = {
   label: "Rosé",
   description: "Soft pink and warm ivory — easy on the eyes",
   palette: {
-    background: { hex: "#1a0f15", alpha: 1 },
-    midground: { hex: "#ffd4e1", alpha: 1 },
+    background: { hex: "#2b1a23", alpha: 1 },
+    midground: { hex: "#ffe6ee", alpha: 1 },
     foreground: { hex: "#ffffff", alpha: 0 },
-    warmGlow: "rgba(249, 168, 212, 0.3)",
-    noiseOpacity: 0.9,
+    warmGlow: "rgba(249, 168, 212, 0.22)",
+    noiseOpacity: 0.55,
   },
   typography: {
     ...DEFAULT_TYPOGRAPHY,
@@ -204,9 +204,55 @@ export const defaultLargeTheme: DashboardTheme = {
   },
 };
 
+export const readerLightTheme: DashboardTheme = {
+  name: "reader-light",
+  label: "Reader Light",
+  description: "Warm off-white and brown — high-readability laptop mode",
+  palette: {
+    background: { hex: "#f6efe3", alpha: 1 },
+    midground: { hex: "#3b281d", alpha: 1 },
+    foreground: { hex: "#6f4a32", alpha: 1 },
+    warmGlow: "rgba(148, 96, 45, 0.10)",
+    noiseOpacity: 0.16,
+  },
+  typography: {
+    fontSans: SYSTEM_SANS,
+    fontMono: SYSTEM_MONO,
+    baseSize: "17px",
+    lineHeight: "1.68",
+    letterSpacing: "0",
+  },
+  layout: {
+    radius: "0.5rem",
+    density: "comfortable",
+  },
+  colorOverrides: {
+    card: "#fff9ef",
+    cardForeground: "#3b281d",
+    popover: "#fffaf2",
+    popoverForeground: "#3b281d",
+    primary: "#5f3b24",
+    primaryForeground: "#fff8ed",
+    secondary: "#ead9c1",
+    secondaryForeground: "#3b281d",
+    muted: "#eee0cd",
+    mutedForeground: "#694b36",
+    accent: "#dfc8aa",
+    accentForeground: "#332015",
+    border: "#c4a886",
+    input: "#b99770",
+    ring: "#7c4f2f",
+    destructive: "#a13b2d",
+    destructiveForeground: "#fff8ed",
+    success: "#2e7d53",
+    warning: "#a26b22",
+  },
+};
+
 export const BUILTIN_THEMES: Record<string, DashboardTheme> = {
   default: defaultTheme,
   "default-large": defaultLargeTheme,
+  "reader-light": readerLightTheme,
   midnight: midnightTheme,
   ember: emberTheme,
   mono: monoTheme,
