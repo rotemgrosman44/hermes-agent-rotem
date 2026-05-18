@@ -7,8 +7,7 @@
   "scripts": {
     "dev": "pnpm --dir packages/hermes-ink run build && tsx --watch src/entry.tsx",
     "start": "tsx src/entry.tsx",
-    "build": "pnpm --dir packages/hermes-ink run build && tsc -p tsconfig.build.json && pnpm run build:compile && chmod +x dist/entry.js",
-    "build:compile": "babel dist --out-dir dist --config-file ./babel.compiler.config.cjs --extensions .js --keep-file-extension",
+    "build": "node scripts/build.mjs",
     "type-check": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src/ packages/",
     "lint:fix": "eslint src/ packages/ --fix",
@@ -36,6 +35,7 @@
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
     "babel-plugin-react-compiler": "^1.0.0",
+    "esbuild": "~0.27.0",
     "eslint": "^9",
     "eslint-plugin-perfectionist": "^5",
     "eslint-plugin-react": "^7",
