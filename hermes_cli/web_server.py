@@ -460,6 +460,12 @@ class ModelAssignment(BaseModel):
     task: str = ""
 
 
+class FallbackPresetAssignment(BaseModel):
+    """Payload for POST /api/model/fallback/preset."""
+
+    preset: str
+
+
 _GATEWAY_HEALTH_URL = os.getenv("GATEWAY_HEALTH_URL")
 try:
     _GATEWAY_HEALTH_TIMEOUT = float(os.getenv("GATEWAY_HEALTH_TIMEOUT", "3"))
@@ -969,6 +975,96 @@ _AUX_TASK_SLOTS: Tuple[str, ...] = (
     "curator",
 )
 
+_STANDARD_PRIMARY_MODEL: Dict[str, str] = {
+    "provider": "openai-codex",
+    "model": "gpt-5.5",
+}
+_STANDARD_FALLBACK_CHAIN: List[Dict[str, str]] = [
+    {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
+    {
+        "provider": "openrouter",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+    },
+]
+_OPENROUTER_FREE_MODEL: Dict[str, str] = {
+    "provider": "openrouter",
+    "model": "nvidia/nemotron-3-super-120b-a12b:free",
+}
+
+
+def _fallback_primary_from_config(config: Dict[str, Any]) -> Dict[str, str]:
+    model_cfg = config.get("model")
+    if isinstance(model_cfg, dict):
+        model_name = model_cfg.get(
+            "default",
+            model_cfg.get("model", model_cfg.get("name", "")),
+        )
+        return {
+            "provider": str(model_cfg.get("provider", "") or ""),
+            "model": str(model_name or ""),
+        }
+    return {"provider": "", "model": str(model_cfg) if model_cfg else ""}
+
+
+def _read_fallback_chain(config: Dict[str, Any]) -> List[Dict[str, str]]:
+    chain = config.get("fallback_providers") or []
+    if isinstance(chain, list):
+        result: List[Dict[str, str]] = []
+        for entry in chain:
+            if not isinstance(entry, dict):
+                continue
+            provider = str(entry.get("provider", "") or "").strip()
+            model = str(entry.get("model", "") or "").strip()
+            if provider and model:
+                result.append({"provider": provider, "model": model})
+        if result:
+            return result
+
+    legacy = config.get("fallback_model")
+    legacy_entries = legacy if isinstance(legacy, list) else [legacy]
+    result = []
+    for entry in legacy_entries:
+        if not isinstance(entry, dict):
+            continue
+        provider = str(entry.get("provider", "") or "").strip()
+        model = str(entry.get("model", "") or "").strip()
+        if provider and model:
+            result.append({"provider": provider, "model": model})
+    return result
+
+
+def _set_main_model(config: Dict[str, Any], *, provider: str, model: str) -> None:
+    model_cfg = config.get("model")
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+    model_cfg["provider"] = provider
+    model_cfg["default"] = model
+    model_cfg["base_url"] = ""
+    model_cfg.pop("context_length", None)
+    config["model"] = model_cfg
+
+
+def _set_fallback_chain(config: Dict[str, Any], chain: List[Dict[str, str]]) -> None:
+    config["fallback_providers"] = [dict(entry) for entry in chain]
+    config.pop("fallback_model", None)
+
+
+def _fallback_response(config: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "primary": _fallback_primary_from_config(config),
+        "chain": _read_fallback_chain(config),
+        "presets": {
+            "standard": {
+                "primary": dict(_STANDARD_PRIMARY_MODEL),
+                "chain": [dict(entry) for entry in _STANDARD_FALLBACK_CHAIN],
+            },
+            "openrouter_free": {
+                "primary": dict(_OPENROUTER_FREE_MODEL),
+                "chain": [],
+            },
+        },
+    }
+
 
 @app.get("/api/model/options")
 def get_model_options():
@@ -1016,6 +1112,53 @@ def get_model_options():
     except Exception:
         _log.exception("GET /api/model/options failed")
         raise HTTPException(status_code=500, detail="Failed to list model options")
+
+
+@app.get("/api/model/fallback")
+def get_fallback_models():
+    """Return the current main model and fallback provider chain."""
+    try:
+        return _fallback_response(load_config())
+    except Exception:
+        _log.exception("GET /api/model/fallback failed")
+        raise HTTPException(status_code=500, detail="Failed to read fallback config")
+
+
+@app.post("/api/model/fallback/preset")
+def set_fallback_preset(body: FallbackPresetAssignment):
+    """Apply a known model/fallback preset.
+
+    ``standard`` restores Rotem's default Codex → Gemini API → OpenRouter
+    Nemotron-free structure. ``openrouter_free`` makes Nemotron-free the main
+    model and clears paid fallback entries for a cost-capped mode.
+    """
+    preset = (body.preset or "").strip().lower()
+    try:
+        cfg = load_config()
+        if preset == "standard":
+            _set_main_model(
+                cfg,
+                provider=_STANDARD_PRIMARY_MODEL["provider"],
+                model=_STANDARD_PRIMARY_MODEL["model"],
+            )
+            _set_fallback_chain(cfg, _STANDARD_FALLBACK_CHAIN)
+        elif preset == "openrouter_free":
+            _set_main_model(
+                cfg,
+                provider=_OPENROUTER_FREE_MODEL["provider"],
+                model=_OPENROUTER_FREE_MODEL["model"],
+            )
+            _set_fallback_chain(cfg, [])
+        else:
+            raise HTTPException(status_code=400, detail="unknown fallback preset")
+
+        save_config(cfg)
+        return {"ok": True, "preset": preset, **_fallback_response(cfg)}
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("POST /api/model/fallback/preset failed")
+        raise HTTPException(status_code=500, detail="Failed to update fallback config")
 
 
 @app.get("/api/model/auxiliary")

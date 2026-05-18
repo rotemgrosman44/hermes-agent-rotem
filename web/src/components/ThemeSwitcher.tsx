@@ -19,7 +19,10 @@ import { cn } from "@/lib/utils";
  * `dropUp` so the menu opens above the trigger instead of clipping below
  * the viewport.
  */
-export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
+export function ThemeSwitcher({
+  compact = false,
+  dropUp = false,
+}: ThemeSwitcherProps) {
   const { themeName, availableThemes, setTheme } = useTheme();
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -58,7 +61,10 @@ export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
       <Button
         ghost
         onClick={() => setTheme(isReaderLight ? "default-large" : "reader-light")}
-        className="px-2 py-1 normal-case tracking-normal font-normal text-xs text-muted-foreground hover:text-foreground"
+        className={cn(
+          "normal-case tracking-normal font-normal text-xs text-muted-foreground hover:text-foreground",
+          compact ? "px-1.5 py-1" : "px-2 py-1",
+        )}
         title={quickModeLabel}
         aria-label={quickModeLabel}
         aria-pressed={isReaderLight}
@@ -73,18 +79,24 @@ export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
       <Button
         ghost
         onClick={() => setOpen((o) => !o)}
-        className="px-2 py-1 normal-case tracking-normal font-normal text-xs text-muted-foreground hover:text-foreground"
+        className={cn(
+          "normal-case tracking-normal font-normal text-xs text-muted-foreground hover:text-foreground",
+          compact ? "px-1.5 py-1" : "px-2 py-1",
+        )}
         title={t.theme?.switchTheme ?? "Switch theme"}
         aria-label={t.theme?.switchTheme ?? "Switch theme"}
         aria-expanded={open}
         aria-haspopup="listbox"
       >
-        <span className="inline-flex items-center gap-1.5">
+        <span className={cn("inline-flex items-center", compact ? "gap-0" : "gap-1.5")}>
           <Palette className="h-3.5 w-3.5" />
 
           <Typography
             mondwest
-            className="hidden sm:inline tracking-normal uppercase text-[0.7rem]"
+            className={cn(
+              "hidden tracking-normal uppercase text-[0.7rem]",
+              !compact && "sm:inline",
+            )}
           >
             {label}
           </Typography>
@@ -186,5 +198,6 @@ function PlaceholderSwatch() {
 }
 
 interface ThemeSwitcherProps {
+  compact?: boolean;
   dropUp?: boolean;
 }

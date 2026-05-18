@@ -1,6 +1,7 @@
 {
   "name": "hermes-agent",
   "version": "1.0.0",
+  "packageManager": "pnpm@11.1.1",
   "description": "An AI agent with advanced tool-calling capabilities, featuring a flexible toolsets system for organizing and managing tools.",
   "private": true,
   "scripts": {

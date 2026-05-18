@@ -93,6 +93,13 @@ export const api = {
   getModelInfo: () => fetchJSON<ModelInfoResponse>("/api/model/info"),
   getModelOptions: () => fetchJSON<ModelOptionsResponse>("/api/model/options"),
   getAuxiliaryModels: () => fetchJSON<AuxiliaryModelsResponse>("/api/model/auxiliary"),
+  getFallbackModels: () => fetchJSON<FallbackModelsResponse>("/api/model/fallback"),
+  applyFallbackPreset: (preset: FallbackPreset) =>
+    fetchJSON<FallbackPresetResponse>("/api/model/fallback/preset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preset }),
+    }),
   setModelAssignment: (body: ModelAssignmentRequest) =>
     fetchJSON<ModelAssignmentResponse>("/api/model/set", {
       method: "POST",
@@ -641,6 +648,29 @@ export interface AuxiliaryTaskAssignment {
 export interface AuxiliaryModelsResponse {
   tasks: AuxiliaryTaskAssignment[];
   main: { provider: string; model: string };
+}
+
+export interface FallbackModelRef {
+  provider: string;
+  model: string;
+}
+
+export type FallbackPreset = "standard" | "openrouter_free";
+
+export interface FallbackPresetState {
+  primary: FallbackModelRef;
+  chain: FallbackModelRef[];
+}
+
+export interface FallbackModelsResponse {
+  primary: FallbackModelRef;
+  chain: FallbackModelRef[];
+  presets: Record<FallbackPreset, FallbackPresetState>;
+}
+
+export interface FallbackPresetResponse extends FallbackModelsResponse {
+  ok: boolean;
+  preset: FallbackPreset;
 }
 
 export interface ModelAssignmentRequest {

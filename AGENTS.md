@@ -13,6 +13,14 @@ source .venv/bin/activate   # or: source venv/bin/activate
 `$HOME/.hermes/hermes-agent/venv` (for worktrees that share a venv with the
 main checkout).
 
+
+## JavaScript Dependency Policy
+
+- Use `pnpm` instead of `npm` or `yarn` for JavaScript dependency management wherever practical.
+- Keep `minimumReleaseAge: 1440` in pnpm config (`pnpm-workspace.yaml` and global pnpm config) so newly published package versions cannot be installed until they are at least 24 hours old.
+- Do not run `npm install`, `npm ci`, or `yarn install` unless a specific project requirement makes pnpm impractical; if you do, record why.
+- Current exception: `scripts/whatsapp-bridge` uses Baileys git/exotic subdependencies that pnpm blocks by default, so keep that bridge on its existing npm path until the dependency chain is replaced or safely vendored.
+
 ## Project Structure
 
 File counts shift constantly — don't treat the tree below as exhaustive.

@@ -3,7 +3,10 @@ import {
   useEffect,
   useMemo,
   useState,
+  type CSSProperties,
   type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import {
@@ -18,6 +21,8 @@ import {
   Activity,
   BarChart3,
   BookOpen,
+  ChevronsLeft,
+  ChevronsRight,
   Clock,
   Code,
   Cpu,
@@ -38,6 +43,7 @@ import {
   Sparkles,
   Star,
   Terminal,
+  Monitor,
   Users,
   Wrench,
   X,
@@ -86,6 +92,45 @@ function UnknownRouteFallback({ pluginsLoading }: { pluginsLoading: boolean }) {
     return null;
   }
   return <Navigate to="/sessions" replace />;
+}
+
+const SIDEBAR_WIDTH_STORAGE_KEY = "hermes.dashboard.sidebar.width";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "hermes.dashboard.sidebar.collapsed";
+const SIDEBAR_DEFAULT_WIDTH = 256;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 720;
+const SIDEBAR_COLLAPSED_WIDTH = 68;
+const SIDEBAR_RESIZE_STEP = 24;
+
+function getSidebarViewportMax(): number {
+  if (typeof window === "undefined") return SIDEBAR_MAX_WIDTH;
+  if (!window.matchMedia("(min-width: 1024px)").matches) {
+    return SIDEBAR_MAX_WIDTH;
+  }
+  return Math.max(
+    SIDEBAR_MIN_WIDTH,
+    Math.min(SIDEBAR_MAX_WIDTH, Math.floor(window.innerWidth * 0.55)),
+  );
+}
+
+function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
+  return Math.min(
+    getSidebarViewportMax(),
+    Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)),
+  );
+}
+
+function getStoredSidebarWidth(): number {
+  if (typeof window === "undefined") return SIDEBAR_DEFAULT_WIDTH;
+  const stored = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+  if (stored === null) return SIDEBAR_DEFAULT_WIDTH;
+  return clampSidebarWidth(Number.parseInt(stored, 10));
+}
+
+function getStoredSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
 }
 
 const CHAT_NAV_ITEM: NavItem = {
@@ -161,6 +206,13 @@ const BUILTIN_NAV_REST: NavItem[] = [
   },
 ];
 
+const OFFICE_NAV_ITEM: NavItem = {
+  path: "http://127.0.0.1:3001/office",
+  label: "Office",
+  icon: Monitor,
+  external: true,
+};
+
 const ICON_MAP: Record<string, ComponentType<{ className?: string }>> = {
   Activity,
   BarChart3,
@@ -169,6 +221,7 @@ const ICON_MAP: Record<string, ComponentType<{ className?: string }>> = {
   FileText,
   KeyRound,
   MessageSquare,
+  Monitor,
   Package,
   Settings,
   Puzzle,
@@ -238,6 +291,7 @@ function partitionSidebarNav(
     if (builtinPaths.has(item.path)) coreItems.push(item);
     else pluginItems.push(item);
   }
+  pluginItems.push(OFFICE_NAV_ITEM);
   return { coreItems, pluginItems };
 }
 
@@ -310,11 +364,32 @@ export default function App() {
   const { manifests, loading: pluginsLoading } = usePlugins();
   const { theme } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isLargeViewport, setIsLargeViewport] = useState(() =>
+    typeof window === "undefined"
+      ? false
+      : window.matchMedia("(min-width: 1024px)").matches,
+  );
+  const [storedSidebarCollapsed, setStoredSidebarCollapsed] = useState(
+    getStoredSidebarCollapsed,
+  );
+  const [sidebarWidth, setSidebarWidth] = useState(getStoredSidebarWidth);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
   const isDocsRoute = pathname === "/docs" || pathname === "/docs/";
   const normalizedPath = pathname.replace(/\/$/, "") || "/";
   const isChatRoute = normalizedPath === "/chat";
   const embeddedChat = isDashboardEmbeddedChatEnabled();
+  const sidebarCollapsed =
+    storedSidebarCollapsed && isLargeViewport && !mobileOpen;
+  const activeSidebarWidth = sidebarCollapsed
+    ? SIDEBAR_COLLAPSED_WIDTH
+    : sidebarWidth;
+  const sidebarStyle: CSSProperties = {
+    background: "var(--component-sidebar-background)",
+    clipPath: "var(--component-sidebar-clip-path)",
+    borderImage: "var(--component-sidebar-border-image)",
+    width: `${activeSidebarWidth}px`,
+    maxWidth: "calc(100vw - 2rem)",
+  };
 
   // A plugin can replace the built-in /chat page via `tab.override: "/chat"`
   // in its manifest.  When one does, `buildRoutes` already swaps the route
@@ -389,12 +464,92 @@ export default function App() {
 
   useEffect(() => {
     const mql = window.matchMedia("(min-width: 1024px)");
+    setIsLargeViewport(mql.matches);
     const onChange = (e: MediaQueryListEvent) => {
+      setIsLargeViewport(e.matches);
       if (e.matches) setMobileOpen(false);
     };
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      SIDEBAR_COLLAPSED_STORAGE_KEY,
+      String(storedSidebarCollapsed),
+    );
+  }, [storedSidebarCollapsed]);
+
+  useEffect(() => {
+    const onResize = () => {
+      setSidebarWidth((width) => clampSidebarWidth(width));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    setStoredSidebarCollapsed((collapsed) => !collapsed);
+  }, []);
+
+  const handleSidebarResizeStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!isLargeViewport) return;
+      event.preventDefault();
+      setStoredSidebarCollapsed(false);
+
+      const startX = event.clientX;
+      const startWidth = sidebarWidth;
+      const root = document.documentElement;
+      const previousCursor = root.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+
+      root.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        setSidebarWidth(
+          clampSidebarWidth(startWidth + moveEvent.clientX - startX),
+        );
+      };
+
+      const onPointerUp = () => {
+        root.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerUp);
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+      window.addEventListener("pointercancel", onPointerUp);
+    },
+    [isLargeViewport, sidebarWidth],
+  );
+
+  const handleSidebarResizeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!isLargeViewport) return;
+      const step = event.shiftKey ? SIDEBAR_RESIZE_STEP * 2 : SIDEBAR_RESIZE_STEP;
+      let nextWidth: number | null = null;
+
+      if (event.key === "ArrowLeft") nextWidth = sidebarWidth - step;
+      if (event.key === "ArrowRight") nextWidth = sidebarWidth + step;
+      if (event.key === "Home") nextWidth = SIDEBAR_MIN_WIDTH;
+      if (event.key === "End") nextWidth = getSidebarViewportMax();
+
+      if (nextWidth === null) return;
+      event.preventDefault();
+      setStoredSidebarCollapsed(false);
+      setSidebarWidth(clampSidebarWidth(nextWidth));
+    },
+    [isLargeViewport, sidebarWidth],
+  );
 
   return (
     <div
@@ -457,48 +612,64 @@ export default function App() {
           <aside
             id="app-sidebar"
             aria-label={t.app.navigation}
+            data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
             className={cn(
-              "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh w-64 min-h-0 flex-col",
+              "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh min-h-0 flex-col",
+              "overflow-hidden",
               "border-r border-current/20",
               "bg-background-base/95 backdrop-blur-sm",
               "transition-transform duration-200 ease-out",
               mobileOpen ? "translate-x-0" : "-translate-x-full",
               "lg:sticky lg:top-0 lg:translate-x-0 lg:shrink-0",
             )}
-            style={{
-              background: "var(--component-sidebar-background)",
-              clipPath: "var(--component-sidebar-clip-path)",
-              borderImage: "var(--component-sidebar-border-image)",
-            }}
+            style={sidebarStyle}
           >
             <div
               className={cn(
-                "flex h-14 shrink-0 items-center justify-between gap-2",
+                "flex h-14 shrink-0 items-center gap-2",
+                sidebarCollapsed ? "justify-center px-2" : "justify-between px-5",
                 "border-b border-current/20",
               )}
             >
-              <div className="flex items-center gap-2">
-                <PluginSlot name="header-left" />
+              {!sidebarCollapsed && (
+                <div className="flex min-w-0 items-center gap-2">
+                  <PluginSlot name="header-left" />
 
-                <Typography
-                  className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-                  style={{ mixBlendMode: "plus-lighter" }}
+                  <Typography
+                    className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
+                    style={{ mixBlendMode: "plus-lighter" }}
+                  >
+                    Hermes
+                    <br />
+                    Agent
+                  </Typography>
+                </div>
+              )}
+
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  ghost
+                  size="icon"
+                  onClick={toggleSidebarCollapsed}
+                  aria-label={
+                    sidebarCollapsed ? t.common.expand : t.common.collapse
+                  }
+                  title={sidebarCollapsed ? t.common.expand : t.common.collapse}
+                  className="hidden lg:inline-flex text-midground/70 hover:text-midground"
                 >
-                  Hermes
-                  <br />
-                  Agent
-                </Typography>
-              </div>
+                  {sidebarCollapsed ? <ChevronsRight /> : <ChevronsLeft />}
+                </Button>
 
-              <Button
-                ghost
-                size="icon"
-                onClick={closeMobile}
-                aria-label={t.app.closeNavigation}
-                className="lg:hidden text-midground/70 hover:text-midground"
-              >
-                <X />
-              </Button>
+                <Button
+                  ghost
+                  size="icon"
+                  onClick={closeMobile}
+                  aria-label={t.app.closeNavigation}
+                  className="lg:hidden text-midground/70 hover:text-midground"
+                >
+                  <X />
+                </Button>
+              </div>
             </div>
 
             <nav
@@ -508,6 +679,7 @@ export default function App() {
               <ul className="flex flex-col">
                 {sidebarNav.coreItems.map((item) => (
                   <SidebarNavLink
+                    collapsed={sidebarCollapsed}
                     closeMobile={closeMobile}
                     item={item}
                     key={item.path}
@@ -526,6 +698,7 @@ export default function App() {
                     className={cn(
                       "px-5 pt-2.5 pb-1",
                       "font-mondwest text-[0.6rem] tracking-[0.15em] uppercase opacity-30",
+                      sidebarCollapsed && "sr-only",
                     )}
                     id="hermes-sidebar-plugin-nav-heading"
                   >
@@ -535,6 +708,7 @@ export default function App() {
                   <ul className="flex flex-col">
                     {sidebarNav.pluginItems.map((item) => (
                       <SidebarNavLink
+                        collapsed={sidebarCollapsed}
                         closeMobile={closeMobile}
                         item={item}
                         key={item.path}
@@ -546,23 +720,58 @@ export default function App() {
               )}
             </nav>
 
-            <SidebarSystemActions onNavigate={closeMobile} />
+            <SidebarSystemActions
+              collapsed={sidebarCollapsed}
+              onNavigate={closeMobile}
+            />
 
             <div
               className={cn(
-                "flex shrink-0 items-center justify-between gap-2",
-                "px-3 py-2",
+                "flex shrink-0 items-center",
+                sidebarCollapsed
+                  ? "justify-center px-2 py-2"
+                  : "justify-between gap-2 px-3 py-2",
                 "border-t border-current/20",
               )}
             >
-              <div className="flex min-w-0 items-center gap-2">
-                <PluginSlot name="header-right" />
-                <ThemeSwitcher dropUp />
-                <LanguageSwitcher />
+              <div
+                className={cn(
+                  "flex min-w-0 items-center",
+                  sidebarCollapsed ? "flex-col gap-1" : "gap-2",
+                )}
+              >
+                {!sidebarCollapsed && <PluginSlot name="header-right" />}
+                <ThemeSwitcher compact={sidebarCollapsed} dropUp />
+                <LanguageSwitcher compact={sidebarCollapsed} />
               </div>
             </div>
 
-            <SidebarFooter />
+            <SidebarFooter collapsed={sidebarCollapsed} />
+
+            <div
+              aria-hidden={sidebarCollapsed}
+              aria-label="Resize navigation"
+              aria-orientation="vertical"
+              aria-valuemax={getSidebarViewportMax()}
+              aria-valuemin={SIDEBAR_MIN_WIDTH}
+              aria-valuenow={sidebarWidth}
+              className={cn(
+                "hidden lg:flex",
+                "absolute inset-y-0 right-0 z-20 w-2 items-center justify-center",
+                "cursor-col-resize touch-none",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
+                "hover:bg-midground/10 focus-visible:bg-midground/10",
+                sidebarCollapsed && "pointer-events-none opacity-0",
+              )}
+              onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
+              onKeyDown={handleSidebarResizeKeyDown}
+              onPointerDown={handleSidebarResizeStart}
+              role="separator"
+              tabIndex={sidebarCollapsed ? -1 : 0}
+              title="Resize navigation"
+            >
+              <span className="h-10 w-px bg-current/35" />
+            </div>
           </aside>
 
           <PageHeaderProvider pluginTabs={pluginTabMeta}>
@@ -635,12 +844,52 @@ export default function App() {
   );
 }
 
-function SidebarNavLink({ closeMobile, item, t }: SidebarNavLinkProps) {
-  const { path, label, labelKey, icon: Icon } = item;
+function SidebarNavLink({
+  collapsed,
+  closeMobile,
+  item,
+  t,
+}: SidebarNavLinkProps) {
+  const { path, label, labelKey, icon: Icon, external } = item;
 
   const navLabel = labelKey
     ? ((t.app.nav as Record<string, string>)[labelKey] ?? label)
     : label;
+
+  if (external) {
+    return (
+      <li>
+        <a
+          href={path}
+          onClick={closeMobile}
+          target="_blank"
+          rel="noreferrer"
+          className={cn(
+            "group relative flex items-center",
+            collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-5 py-2.5",
+            "font-mondwest text-[0.8rem] tracking-[0.12em]",
+            "whitespace-nowrap transition-colors cursor-pointer",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
+            "opacity-60 hover:opacity-100",
+          )}
+          title={navLabel}
+          style={{
+            clipPath: "var(--component-tab-clip-path)",
+          }}
+        >
+          <Icon className="h-3.5 w-3.5 shrink-0" />
+          <span className={cn(collapsed ? "sr-only" : "truncate")}>
+            {navLabel}
+          </span>
+
+          <span
+            aria-hidden
+            className="absolute inset-y-0.5 left-1.5 right-1.5 bg-midground opacity-0 pointer-events-none transition-opacity duration-200 group-hover:opacity-5"
+          />
+        </a>
+      </li>
+    );
+  }
 
   return (
     <li>
@@ -650,14 +899,15 @@ function SidebarNavLink({ closeMobile, item, t }: SidebarNavLinkProps) {
         onClick={closeMobile}
         className={({ isActive }) =>
           cn(
-            "group relative flex items-center gap-3",
-            "px-5 py-2.5",
+            "group relative flex items-center",
+            collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-5 py-2.5",
             "font-mondwest text-[0.8rem] tracking-[0.12em]",
             "whitespace-nowrap transition-colors cursor-pointer",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
             isActive ? "text-midground" : "opacity-60 hover:opacity-100",
           )
         }
+        title={navLabel}
         style={{
           clipPath: "var(--component-tab-clip-path)",
         }}
@@ -665,7 +915,9 @@ function SidebarNavLink({ closeMobile, item, t }: SidebarNavLinkProps) {
         {({ isActive }) => (
           <>
             <Icon className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">{navLabel}</span>
+            <span className={cn(collapsed ? "sr-only" : "truncate")}>
+              {navLabel}
+            </span>
 
             <span
               aria-hidden
@@ -686,7 +938,13 @@ function SidebarNavLink({ closeMobile, item, t }: SidebarNavLinkProps) {
   );
 }
 
-function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
+function SidebarSystemActions({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed: boolean;
+  onNavigate: () => void;
+}) {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { activeAction, isBusy, isRunning, pendingAction, runAction } =
@@ -728,12 +986,13 @@ function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
         className={cn(
           "px-5 pt-0.5 pb-0.5",
           "font-mondwest text-[0.6rem] tracking-[0.15em] uppercase opacity-30",
+          collapsed && "sr-only",
         )}
       >
         {t.app.system}
       </span>
 
-      <SidebarStatusStrip />
+      <SidebarStatusStrip collapsed={collapsed} />
 
       <ul className="flex flex-col">
         {items.map(({ action, icon: Icon, label, runningLabel, spin }) => {
@@ -752,7 +1011,10 @@ function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
                 aria-busy={busy}
                 active={busy}
                 className={cn(
-                  "gap-3 px-5 py-1.5 whitespace-nowrap",
+                  collapsed
+                    ? "justify-center gap-0 px-0 py-2"
+                    : "gap-3 px-5 py-1.5",
+                  "whitespace-nowrap",
                   "font-mondwest text-[0.75rem] tracking-[0.1em]",
                   "transition-opacity",
                   busy
@@ -760,6 +1022,7 @@ function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
                     : "opacity-60 hover:opacity-100",
                   "disabled:opacity-30",
                 )}
+                title={displayLabel}
               >
                 {isPending ? (
                   <Spinner className="shrink-0 text-[0.875rem]" />
@@ -774,7 +1037,9 @@ function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
                   />
                 )}
 
-                <span className="truncate">{displayLabel}</span>
+                <span className={cn(collapsed ? "sr-only" : "truncate")}>
+                  {displayLabel}
+                </span>
 
                 <span
                   aria-hidden
@@ -798,6 +1063,7 @@ function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
 }
 
 interface NavItem {
+  external?: boolean;
   icon: ComponentType<{ className?: string }>;
   label: string;
   labelKey?: string;
@@ -805,6 +1071,7 @@ interface NavItem {
 }
 
 interface SidebarNavLinkProps {
+  collapsed: boolean;
   closeMobile: () => void;
   item: NavItem;
   t: Translations;

@@ -5,25 +5,55 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 
 /** Gateway + session summary for the System sidebar block (no separate strip chrome). */
-export function SidebarStatusStrip() {
+export function SidebarStatusStrip({
+  collapsed = false,
+}: SidebarStatusStripProps) {
   const status = useSidebarStatus();
   const { t } = useI18n();
 
   if (status === null) {
     return (
-      <div className="px-5 py-1.5" aria-hidden>
-        <div className="h-2 w-[80%] max-w-full animate-pulse rounded-sm bg-midground/10" />
+      <div className={cn(collapsed ? "px-0 py-2" : "px-5 py-1.5")} aria-hidden>
+        <div
+          className={cn(
+            "animate-pulse rounded-sm bg-midground/10",
+            collapsed ? "mx-auto h-2 w-2" : "h-2 w-[80%] max-w-full",
+          )}
+        />
       </div>
     );
   }
 
   const gw = gatewayLine(status, t);
   const { activeSessionsLabel, gatewayStatusLabel } = t.app;
+  const statusTitle = `${gatewayStatusLabel} ${gw.label}. ${activeSessionsLabel} ${status.active_sessions}`;
+
+  if (collapsed) {
+    return (
+      <Link
+        to="/sessions"
+        title={statusTitle}
+        aria-label={statusTitle}
+        className={cn(
+          "flex justify-center px-0 py-2",
+          "text-muted-foreground/70",
+          "transition-colors hover:text-muted-foreground/90",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground/40",
+          "focus-visible:ring-inset",
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn("h-2 w-2 shrink-0 bg-current", gw.tone)}
+        />
+      </Link>
+    );
+  }
 
   return (
     <Link
       to="/sessions"
-      title={t.app.statusOverview}
+      title={statusTitle}
       className={cn(
         "block text-left",
         "px-5 pb-2 pt-0.5",
@@ -48,6 +78,10 @@ export function SidebarStatusStrip() {
       </div>
     </Link>
   );
+}
+
+interface SidebarStatusStripProps {
+  collapsed?: boolean;
 }
 
 function gatewayLine(

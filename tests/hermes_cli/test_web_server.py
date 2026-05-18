@@ -1201,8 +1201,9 @@ class TestModelInfoEndpoint:
             from starlette.testclient import TestClient
         except ImportError:
             pytest.skip("fastapi/starlette not installed")
-        from hermes_cli.web_server import app
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
         self.client = TestClient(app)
+        self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
 
     def test_model_info_returns_200(self):
         resp = self.client.get("/api/model/info")
@@ -1214,6 +1215,91 @@ class TestModelInfoEndpoint:
         assert "config_context_length" in data
         assert "effective_context_length" in data
         assert "capabilities" in data
+
+    def test_fallback_chain_get_normalizes_current_config(self, monkeypatch):
+        import hermes_cli.web_server as ws
+
+        monkeypatch.setattr(ws, "load_config", lambda: {
+            "model": {"provider": "openai-codex", "default": "gpt-5.5"},
+            "fallback_providers": [
+                {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
+                {
+                    "provider": "openrouter",
+                    "model": "nvidia/nemotron-3-super-120b-a12b:free",
+                },
+            ],
+        })
+
+        resp = self.client.get("/api/model/fallback")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["primary"] == {"provider": "openai-codex", "model": "gpt-5.5"}
+        assert data["chain"] == [
+            {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
+            {
+                "provider": "openrouter",
+                "model": "nvidia/nemotron-3-super-120b-a12b:free",
+            },
+        ]
+
+    def test_fallback_standard_preset_writes_primary_and_chain(self, monkeypatch):
+        import hermes_cli.web_server as ws
+
+        saved = {}
+        monkeypatch.setattr(ws, "load_config", lambda: {
+            "model": {"provider": "openrouter", "default": "old-model"},
+            "fallback_model": {"provider": "openrouter", "model": "legacy"},
+            "image_gen": {"provider": "openai-codex", "model": "gpt-image-2-medium"},
+        })
+        monkeypatch.setattr(ws, "save_config", lambda cfg: saved.update(cfg))
+
+        resp = self.client.post("/api/model/fallback/preset", json={"preset": "standard"})
+
+        assert resp.status_code == 200
+        assert saved["model"] == {
+            "provider": "openai-codex",
+            "default": "gpt-5.5",
+            "base_url": "",
+        }
+        assert saved["fallback_providers"] == [
+            {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
+            {
+                "provider": "openrouter",
+                "model": "nvidia/nemotron-3-super-120b-a12b:free",
+            },
+        ]
+        assert "fallback_model" not in saved
+        assert saved["image_gen"] == {"provider": "openai-codex", "model": "gpt-image-2-medium"}
+
+    def test_fallback_free_preset_sets_openrouter_free_main_and_clears_chain(self, monkeypatch):
+        import hermes_cli.web_server as ws
+
+        saved = {}
+        monkeypatch.setattr(
+            ws,
+            "load_config",
+            lambda: {
+                "model": {"provider": "openai-codex", "default": "gpt-5.5"},
+                "fallback_providers": [
+                    {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
+                ],
+            },
+        )
+        monkeypatch.setattr(ws, "save_config", lambda cfg: saved.update(cfg))
+
+        resp = self.client.post(
+            "/api/model/fallback/preset",
+            json={"preset": "openrouter_free"},
+        )
+
+        assert resp.status_code == 200
+        assert saved["model"] == {
+            "provider": "openrouter",
+            "default": "nvidia/nemotron-3-super-120b-a12b:free",
+            "base_url": "",
+        }
+        assert saved["fallback_providers"] == []
 
     def test_model_info_with_dict_config(self, monkeypatch):
         import hermes_cli.web_server as ws

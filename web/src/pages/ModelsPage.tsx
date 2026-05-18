@@ -6,6 +6,8 @@ import {
   DollarSign,
   Eye,
   RefreshCw,
+  RotateCcw,
+  Route,
   Settings2,
   Star,
   Wrench,
@@ -15,6 +17,8 @@ import { api } from "@/lib/api";
 import type {
   AuxiliaryModelsResponse,
   AuxiliaryTaskAssignment,
+  FallbackModelsResponse,
+  FallbackPreset,
   ModelsAnalyticsModelEntry,
   ModelsAnalyticsResponse,
 } from "@/lib/api";
@@ -447,19 +451,23 @@ type PickerTarget =
 
 function ModelSettingsPanel({
   aux,
+  fallback,
   refreshKey,
   onSaved,
 }: {
   aux: AuxiliaryModelsResponse | null;
+  fallback: FallbackModelsResponse | null;
   refreshKey: number;
   onSaved(): void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  const [fallbackBusy, setFallbackBusy] = useState<FallbackPreset | null>(null);
 
   const mainProv = aux?.main.provider ?? "";
   const mainModel = aux?.main.model ?? "";
+  const fallbackChain = fallback?.chain ?? [];
 
   const applyAssignment = async ({
     scope,
@@ -491,6 +499,16 @@ function ModelSettingsPanel({
       onSaved();
     } finally {
       setResetBusy(false);
+    }
+  };
+
+  const applyFallbackPreset = async (preset: FallbackPreset) => {
+    setFallbackBusy(preset);
+    try {
+      await api.applyFallbackPreset(preset);
+      onSaved();
+    } finally {
+      setFallbackBusy(null);
     }
   };
 
@@ -542,6 +560,68 @@ function ModelSettingsPanel({
           >
             Change
           </Button>
+        </div>
+
+        <div className="space-y-2 border border-border/50 bg-muted/10 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Route className="h-3 w-3 text-primary" />
+              <span className="text-xs font-medium uppercase tracking-wider">
+                Fallback chain
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                {fallbackChain.length} configured
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                size="sm"
+                outlined
+                onClick={() => applyFallbackPreset("standard")}
+                disabled={fallbackBusy !== null}
+                className="h-7 text-[10px]"
+                prefix={
+                  fallbackBusy === "standard" ? <Spinner /> : <RotateCcw />
+                }
+              >
+                Standard
+              </Button>
+              <Button
+                size="sm"
+                outlined
+                onClick={() => applyFallbackPreset("openrouter_free")}
+                disabled={fallbackBusy !== null}
+                className="h-7 text-[10px]"
+                prefix={
+                  fallbackBusy === "openrouter_free" ? <Spinner /> : <Zap />
+                }
+              >
+                OpenRouter free
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            {fallbackChain.length > 0 ? (
+              fallbackChain.map((entry, index) => (
+                <div
+                  key={`${entry.provider}:${entry.model}:${index}`}
+                  className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground"
+                >
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center border border-border/60 text-[10px] text-foreground">
+                    {index + 1}
+                  </span>
+                  <span className="min-w-0 truncate">
+                    {entry.provider} · {entry.model}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="text-[10px] font-mono text-muted-foreground">
+                no fallback providers
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Auxiliary rows */}
@@ -643,6 +723,7 @@ export default function ModelsPage() {
   const [days, setDays] = useState(30);
   const [data, setData] = useState<ModelsAnalyticsResponse | null>(null);
   const [aux, setAux] = useState<AuxiliaryModelsResponse | null>(null);
+  const [fallback, setFallback] = useState<FallbackModelsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveKey, setSaveKey] = useState(0);
@@ -655,21 +736,26 @@ export default function ModelsPage() {
     Promise.all([
       api.getModelsAnalytics(days),
       api.getAuxiliaryModels().catch(() => null),
+      api.getFallbackModels().catch(() => null),
     ])
-      .then(([models, auxData]) => {
+      .then(([models, auxData, fallbackData]) => {
         setData(models);
         setAux(auxData);
+        setFallback(fallbackData);
       })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
   }, [days]);
 
   const onAssigned = useCallback(() => {
-    // Reload aux state after any assignment change.
-    api
-      .getAuxiliaryModels()
-      .then(setAux)
-      .catch(() => {});
+    // Reload model settings after any assignment change.
+    Promise.all([
+      api.getAuxiliaryModels().catch(() => null),
+      api.getFallbackModels().catch(() => null),
+    ]).then(([auxData, fallbackData]) => {
+      setAux(auxData);
+      setFallback(fallbackData);
+    });
     setSaveKey((k) => k + 1);
   }, []);
 
@@ -727,6 +813,7 @@ export default function ModelsPage() {
 
       <ModelSettingsPanel
         aux={aux}
+        fallback={fallback}
         refreshKey={saveKey}
         onSaved={onAssigned}
       />

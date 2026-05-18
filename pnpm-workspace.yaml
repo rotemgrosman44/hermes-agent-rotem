@@ -1,0 +1,16 @@
+packages:
+  - .
+  - ui-tui
+  - ui-tui/packages/hermes-ink
+  - web
+  - website
+allowBuilds:
+  '@askjo/camofox-browser': set this to true or false
+  agent-browser: set this to true or false
+  better-sqlite3: set this to true or false
+  core-js: set this to true or false
+  core-js-pure: set this to true or false
+  esbuild: set this to true or false
+  unicode-animations: set this to true or false
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
