@@ -1,0 +1,7 @@
+name: bumblebee_inventory
+version: 0.1.0
+description: "Run Perplexity Bumblebee read-only endpoint inventory scans from Hermes."
+author: Codex
+kind: standalone
+provides_tools:
+  - bumblebee_inventory
