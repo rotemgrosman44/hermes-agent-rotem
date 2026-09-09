@@ -809,6 +809,41 @@ export const cyberpunkTheme: DesktopTheme = {
   }
 }
 
+/** High-contrast slate surfaces for long reading sessions at large UI scale. */
+export const readableDarkTheme: DesktopTheme = {
+  name: 'readable-dark',
+  label: 'Readable Dark',
+  description: 'High-contrast dark surfaces for long reading sessions',
+  colors: {
+    background: '#374151',
+    foreground: '#FFF8EA',
+    card: '#3F4A5A',
+    cardForeground: '#FFF8EA',
+    muted: '#465265',
+    mutedForeground: '#FFFFFF',
+    popover: '#3F4A5A',
+    popoverForeground: '#FFF8EA',
+    primary: '#FFE7B8',
+    primaryForeground: '#313947',
+    secondary: '#526078',
+    secondaryForeground: '#FFF8EA',
+    accent: '#566883',
+    accentForeground: '#FFFFFF',
+    border: '#8290A5',
+    input: '#526078',
+    ring: '#FFE7B8',
+    midground: '#9FC7FF',
+    midgroundForeground: '#202938',
+    composerRing: '#FFE7B8',
+    destructive: '#9B2C2C',
+    destructiveForeground: '#FFFFFF',
+    sidebarBackground: '#303846',
+    sidebarBorder: '#718096',
+    userBubble: '#465873',
+    userBubbleBorder: '#93A4BD'
+  }
+}
+
 /** Cool slate blue for developers. Matches the CLI slate skin. */
 export const slateTheme: DesktopTheme = {
   name: 'slate',
@@ -856,6 +891,7 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
   ember: emberTheme,
   mono: monoTheme,
   slate: slateTheme,
+  'readable-dark': readableDarkTheme,
   cyberpunk: cyberpunkTheme
 }
 
