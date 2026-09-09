@@ -2,8 +2,8 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $backendThemes, __resetBackendSkinSync, ingestBackendSkin } from './backend-sync'
-import { skinPref, ThemeProvider, useTheme } from './context'
-import { everforestTheme, midnightTheme } from './presets'
+import { getBaseColors, skinPref, ThemeProvider, useTheme } from './context'
+import { everforestTheme, midnightTheme, readableDarkTheme } from './presets'
 import type { DesktopTheme } from './types'
 import { installUserTheme } from './user-themes'
 
@@ -413,3 +413,10 @@ function ThemeProbe({ onReady }: { onReady: (ctx: ReturnType<typeof useTheme>) =
 
   return null
 }
+
+describe('Readable Dark mode stability', () => {
+  it('keeps its accessibility palette in both system appearance modes', () => {
+    expect(getBaseColors('readable-dark', 'light')).toBe(readableDarkTheme.colors)
+    expect(getBaseColors('readable-dark', 'dark')).toBe(readableDarkTheme.colors)
+  })
+})

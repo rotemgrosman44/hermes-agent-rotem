@@ -190,6 +190,12 @@ export function getBaseColors(skinName: string, mode: 'light' | 'dark'): Desktop
 }
 
 function paletteFor(seed: DesktopTheme, mode: 'light' | 'dark'): DesktopThemeColors {
+  // Readable Dark is an accessibility palette, not a system-mode pair. Keep
+  // its measured high-contrast colors stable even when the OS reports light.
+  if (seed.name === 'readable-dark') {
+    return seed.colors
+  }
+
   if (mode === 'dark') {
     return seed.darkColors ?? seed.colors
   }

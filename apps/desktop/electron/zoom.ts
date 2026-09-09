@@ -4,6 +4,9 @@
  * through this one clamped scale. Percent is the user-facing unit (100 = the
  * Chromium actual-size baseline); Chromium's internal unit is the zoom level,
  * where factor = 1.2 ^ level.
+ *
+ * Rotem's Omarchy build ships with a 165% readable baseline, exposed as an
+ * ordinary Appearance preset and reset target.
  */
 
 export const ZOOM_STORAGE_KEY = 'hermes:desktop:zoomLevel'
@@ -15,8 +18,8 @@ const MAX_ZOOM_LEVEL = 9
 /** Half Chromium's default step; matching the shortcuts and View menu. */
 export const ZOOM_STEP = 0.1
 
-/** 100%: Chromium actual size, so View → Actual Size (Ctrl/Cmd+0) means it. */
-export const DEFAULT_ZOOM_LEVEL = 0
+/** Readable 165% preset. Fresh installs + Actual Size / Ctrl+0. */
+export const DEFAULT_ZOOM_LEVEL = Math.log(1.65) / Math.log(ZOOM_FACTOR_BASE)
 
 export function clampZoomLevel(value) {
   if (!Number.isFinite(value)) {

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { BUILTIN_THEME_LIST, DEFAULT_TYPOGRAPHY, nousTheme } from './presets'
+import { contrastRatio } from './color'
+import {
+  BUILTIN_THEME_LIST,
+  BUILTIN_THEMES,
+  DEFAULT_SKIN_NAME,
+  DEFAULT_TYPOGRAPHY,
+  nousTheme,
+  readableDarkTheme
+} from './presets'
 
 // #40364: none of the UI text/mono fonts carry emoji glyphs, so every font
 // stack must end with a color-emoji fallback or emoji render as tofu on
@@ -59,5 +67,27 @@ describe('theme typography Latin Extended fallback (#61392)', () => {
     expect(DEFAULT_TYPOGRAPHY.fontMono).toContain('DejaVu Sans Mono')
     expect(DEFAULT_TYPOGRAPHY.fontMono).toContain('Liberation Mono')
     expect(DEFAULT_TYPOGRAPHY.fontMono).toContain('Noto Sans Mono')
+  })
+})
+
+describe('readable-dark accessibility palette', () => {
+  it('is registered without changing the Nous default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('nous')
+    expect(BUILTIN_THEMES['readable-dark']).toBe(readableDarkTheme)
+    expect(BUILTIN_THEMES.nous).not.toBe(readableDarkTheme)
+  })
+
+  it.each([
+    ['background', readableDarkTheme.colors.background, readableDarkTheme.colors.foreground],
+    ['card', readableDarkTheme.colors.card, readableDarkTheme.colors.cardForeground],
+    ['muted', readableDarkTheme.colors.muted, readableDarkTheme.colors.mutedForeground],
+    ['popover', readableDarkTheme.colors.popover, readableDarkTheme.colors.popoverForeground],
+    ['primary', readableDarkTheme.colors.primary, readableDarkTheme.colors.primaryForeground],
+    ['secondary', readableDarkTheme.colors.secondary, readableDarkTheme.colors.secondaryForeground],
+    ['accent', readableDarkTheme.colors.accent, readableDarkTheme.colors.accentForeground],
+    ['destructive', readableDarkTheme.colors.destructive, readableDarkTheme.colors.destructiveForeground],
+    ['userBubble', readableDarkTheme.colors.userBubble!, readableDarkTheme.colors.foreground]
+  ])('%s text contrast is WCAG AA', (_name, background, foreground) => {
+    expect(contrastRatio(background, foreground)).toBeGreaterThanOrEqual(4.5)
   })
 })
