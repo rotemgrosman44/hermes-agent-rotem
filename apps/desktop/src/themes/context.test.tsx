@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { __resetBackendSkinSync, ingestBackendSkin } from './backend-sync'
 import { getBaseColors, skinPref, ThemeProvider, useTheme } from './context'
-import { BUILTIN_THEME_LIST, everforestTheme } from './presets'
+import { BUILTIN_THEME_LIST, everforestTheme, readableDarkTheme } from './presets'
 
 // The live-authoring loop: Hermes writes/edits one skin file and every surface
 // repaints. An in-place edit keeps the NAME — only the palette moves.
@@ -263,5 +263,12 @@ describe('ThemeProvider --dt-primary-solid preset parity', () => {
     if (name === 'nous' && mode === 'dark') {
       expect(expected).not.toBe(primary)
     }
+  })
+})
+
+describe('Readable Dark mode stability', () => {
+  it('keeps its accessibility palette in both system appearance modes', () => {
+    expect(getBaseColors('readable-dark', 'light')).toBe(readableDarkTheme.colors)
+    expect(getBaseColors('readable-dark', 'dark')).toBe(readableDarkTheme.colors)
   })
 })

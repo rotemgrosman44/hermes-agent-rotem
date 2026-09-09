@@ -30,10 +30,10 @@ test('storage key stays stable so persisted zoom survives upgrades', () => {
   assert.equal(ZOOM_STORAGE_KEY, 'hermes:desktop:zoomLevel')
 })
 
-test('default zoom matches the Appearance 90% preset', () => {
+test('default zoom matches the Appearance 165% preset', () => {
   assert.equal(ZOOM_STEP, 0.1)
-  assert.equal(zoomLevelToPercent(DEFAULT_ZOOM_LEVEL), 90)
-  assert.equal(DEFAULT_ZOOM_LEVEL, percentToZoomLevel(90))
+  assert.equal(zoomLevelToPercent(DEFAULT_ZOOM_LEVEL), 165)
+  assert.equal(DEFAULT_ZOOM_LEVEL, percentToZoomLevel(165))
 })
 
 test('clampZoomLevel rejects garbage and enforces bounds', () => {
@@ -59,13 +59,13 @@ test('percentToZoomLevel rejects garbage by falling back to the shipped default'
 })
 
 test('preset percentages roundtrip within rounding', () => {
-  for (const percent of [90, 100, 110, 125, 150, 175]) {
+  for (const percent of [90, 100, 110, 125, 150, 165, 175]) {
     assert.equal(zoomLevelToPercent(percentToZoomLevel(percent)), percent)
   }
 })
 
 test('conversion is monotonic across the preset range', () => {
-  const levels = [90, 100, 110, 125, 150, 175].map(percentToZoomLevel)
+  const levels = [90, 100, 110, 125, 150, 165, 175].map(percentToZoomLevel)
 
   for (let i = 1; i < levels.length; i++) {
     assert.ok(levels[i] > levels[i - 1])
