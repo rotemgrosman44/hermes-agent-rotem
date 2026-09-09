@@ -6,8 +6,10 @@ import {
   DEFAULT_SKIN_NAME,
   DEFAULT_TYPOGRAPHY,
   EMOJI_FALLBACK,
-  nousAltTheme
+  nousAltTheme,
+  readableDarkTheme
 } from './presets'
+import { contrastRatio } from './color'
 
 // #40364: none of the UI text/mono fonts carry emoji glyphs, so every font
 // stack must end with a color-emoji fallback or emoji render as tofu on
@@ -48,5 +50,27 @@ describe('nous-alt is the retired Nous, not the default', () => {
     expect(BUILTIN_THEMES.nous).not.toBe(nousAltTheme)
     expect(nousAltTheme.darkColors?.background).toBe('#0D2F86')
     expect(BUILTIN_THEMES.nous.darkColors?.background).not.toBe(nousAltTheme.darkColors?.background)
+  })
+})
+
+describe('readable-dark accessibility palette', () => {
+  it('is registered without changing the Nous default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('nous')
+    expect(BUILTIN_THEMES['readable-dark']).toBe(readableDarkTheme)
+    expect(BUILTIN_THEMES.nous).not.toBe(readableDarkTheme)
+  })
+
+  it.each([
+    ['background', readableDarkTheme.colors.background, readableDarkTheme.colors.foreground],
+    ['card', readableDarkTheme.colors.card, readableDarkTheme.colors.cardForeground],
+    ['muted', readableDarkTheme.colors.muted, readableDarkTheme.colors.mutedForeground],
+    ['popover', readableDarkTheme.colors.popover, readableDarkTheme.colors.popoverForeground],
+    ['primary', readableDarkTheme.colors.primary, readableDarkTheme.colors.primaryForeground],
+    ['secondary', readableDarkTheme.colors.secondary, readableDarkTheme.colors.secondaryForeground],
+    ['accent', readableDarkTheme.colors.accent, readableDarkTheme.colors.accentForeground],
+    ['destructive', readableDarkTheme.colors.destructive, readableDarkTheme.colors.destructiveForeground],
+    ['userBubble', readableDarkTheme.colors.userBubble!, readableDarkTheme.colors.foreground]
+  ])('%s text contrast is WCAG AA', (_name, background, foreground) => {
+    expect(contrastRatio(background, foreground)).toBeGreaterThanOrEqual(4.5)
   })
 })

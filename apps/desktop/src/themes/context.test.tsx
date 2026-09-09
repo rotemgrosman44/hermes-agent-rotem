@@ -2,8 +2,8 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { __resetBackendSkinSync, ingestBackendSkin } from './backend-sync'
-import { skinPref, ThemeProvider, useTheme } from './context'
-import { everforestTheme } from './presets'
+import { getBaseColors, skinPref, ThemeProvider, useTheme } from './context'
+import { everforestTheme, readableDarkTheme } from './presets'
 
 // The live-authoring loop: Hermes writes/edits one skin file and every surface
 // repaints. An in-place edit keeps the NAME — only the palette moves.
@@ -159,5 +159,12 @@ describe('ThemeProvider highlight preview', () => {
 
     act(() => ctx.previewTheme('does-not-exist', 'dark'))
     expect(cssVar('--theme-foreground')).toBe(painted)
+  })
+})
+
+describe('Readable Dark mode stability', () => {
+  it('keeps its accessibility palette in both system appearance modes', () => {
+    expect(getBaseColors('readable-dark', 'light')).toBe(readableDarkTheme.colors)
+    expect(getBaseColors('readable-dark', 'dark')).toBe(readableDarkTheme.colors)
   })
 })
