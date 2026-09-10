@@ -28,6 +28,7 @@ import {
 import { reachablePreviewUrl } from '@/lib/preview-reach'
 import { rafCoalesce } from '@/lib/raf-coalesce'
 import { cn } from '@/lib/utils'
+import { previewGuestUrl, visiblePreviewUrl } from '@/lib/x-status-preview'
 import { notify, notifyError } from '@/store/notifications'
 import {
   $browserPages,
@@ -102,10 +103,10 @@ function guestPage(webview: PreviewWebview | null | undefined, fallbackUrl = '')
   try {
     return {
       title: webview?.getTitle?.() ?? '',
-      url: webview?.getURL?.() || fallbackUrl
+      url: visiblePreviewUrl(webview?.getURL?.() || fallbackUrl)
     }
   } catch {
-    return { title: '', url: fallbackUrl }
+    return { title: '', url: visiblePreviewUrl(fallbackUrl) }
   }
 }
 
@@ -705,7 +706,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
           // rejected load is a real navigation failure the user has to see —
           // `did-fail-load` doesn't fire for every rejection (a bad scheme
           // rejects outright).
-          webviewRef.current?.loadURL?.(reached)
+          webviewRef.current?.loadURL?.(previewGuestUrl(reached))
         )
         .catch((error: unknown) => {
           setLoadError({
@@ -1023,7 +1024,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
     const webview = document.createElement('webview') as PreviewWebview
     webview.className = 'flex h-full w-full flex-1 bg-transparent'
     webview.setAttribute('partition', 'persist:hermes-preview')
-    webview.setAttribute('src', target.url)
+    webview.setAttribute('src', previewGuestUrl(target.url))
     webview.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no,sandbox=yes')
 
     const onConsole = (event: Event) => {
@@ -1077,7 +1078,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
 
       if (detail.url) {
         setLoadError(null)
-        setCurrentUrl(detail.url)
+        setCurrentUrl(visiblePreviewUrl(detail.url))
       }
 
       notePage()
@@ -1109,7 +1110,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
       setLoadError({
         code: errorCode,
         description: detail.errorDescription || copy.unreachableDescription,
-        url: detail.validatedURL || guestPage(webview, target.url).url
+        url: visiblePreviewUrl(detail.validatedURL || guestPage(webview, target.url).url)
       })
       setLoading(false)
     }
