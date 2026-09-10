@@ -31,6 +31,7 @@ import { admitPreviewExternalUrl, PREVIEW_EXTERNAL_CHANNEL } from '@/lib/preview
 import { reachablePreviewUrl } from '@/lib/preview-reach'
 import { rafCoalesce } from '@/lib/raf-coalesce'
 import { cn } from '@/lib/utils'
+import { previewGuestUrl, visiblePreviewUrl } from '@/lib/x-status-preview'
 import { notify, notifyError } from '@/store/notifications'
 import {
   $browserPages,
@@ -109,10 +110,10 @@ function guestPage(webview: PreviewWebview | null | undefined, fallbackUrl = '')
   try {
     return {
       title: webview?.getTitle?.() ?? '',
-      url: webview?.getURL?.() || fallbackUrl
+      url: visiblePreviewUrl(webview?.getURL?.() || fallbackUrl)
     }
   } catch {
-    return { title: '', url: fallbackUrl }
+    return { title: '', url: visiblePreviewUrl(fallbackUrl) }
   }
 }
 
@@ -763,7 +764,7 @@ export function PreviewPane({
           // rejected load is a real navigation failure the user has to see —
           // `did-fail-load` doesn't fire for every rejection (a bad scheme
           // rejects outright).
-          webviewRef.current?.loadURL?.(reached)
+          webviewRef.current?.loadURL?.(previewGuestUrl(reached))
         )
         .catch((error: unknown) => {
           setLoadError({
@@ -1137,7 +1138,7 @@ export function PreviewPane({
     // A page with no background of its own shows white, as in a browser and the remote HTML frame below.
     webview.className = 'flex h-full w-full flex-1 bg-white'
     webview.setAttribute('partition', 'persist:hermes-preview')
-    webview.setAttribute('src', initialUrl)
+    webview.setAttribute('src', previewGuestUrl(initialUrl))
     webview.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no,sandbox=yes')
 
     // The guest preload (main.ts installs it on this partition) forwards a
@@ -1210,7 +1211,7 @@ export function PreviewPane({
 
       if (detail.url) {
         setLoadError(null)
-        setCurrentUrl(detail.url)
+        setCurrentUrl(visiblePreviewUrl(detail.url))
       }
 
       notePage()
@@ -1245,7 +1246,7 @@ export function PreviewPane({
       setLoadError({
         code: errorCode,
         description: detail.errorDescription || copy.unreachableDescription,
-        url: detail.validatedURL || guestPage(webview, liveUrlRef.current).url
+        url: visiblePreviewUrl(detail.validatedURL || guestPage(webview, liveUrlRef.current).url)
       })
       setLoading(false)
     }
@@ -1427,7 +1428,7 @@ export function PreviewPane({
     setHistory({ back: false, forward: false })
     setLoading(true)
     setCurrentUrl(nextUrl)
-    void webview.loadURL?.(nextUrl)?.catch((error: unknown) => {
+    void webview.loadURL?.(previewGuestUrl(nextUrl))?.catch((error: unknown) => {
       setLoadError({
         description: error instanceof Error ? error.message : copy.unreachableDescription,
         url: nextUrl
