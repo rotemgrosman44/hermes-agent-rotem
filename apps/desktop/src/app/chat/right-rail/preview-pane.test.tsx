@@ -200,6 +200,30 @@ describe('PreviewPane console state', () => {
     expect(webview.getAttribute('src')).toBe('http://localhost:5174')
   })
 
+  it('renders X status links through the official read-only embed while preserving the canonical address', async () => {
+    const source = 'https://x.com/Taltalit/status/2097947431107285200'
+    let rendered!: ReturnType<typeof render>
+
+    await act(async () => {
+      rendered = render(<PreviewPane target={{ kind: 'url', label: 'Tali on X', source, url: source }} />)
+    })
+
+    const webview = rendered.container.querySelector('webview') as HTMLElement
+
+    expect(webview.getAttribute('src')).toContain('https://platform.twitter.com/embed/Tweet.html?')
+    expect(webview.getAttribute('src')).toContain('id=2097947431107285200')
+
+    act(() => {
+      webview.dispatchEvent(
+        Object.assign(new Event('did-navigate'), {
+          url: webview.getAttribute('src')
+        })
+      )
+    })
+
+    expect((rendered.getByRole('textbox', { name: 'Address' }) as HTMLInputElement).value).toBe(source)
+  })
+
   it('continues comment numbering in one conversation and resets it when the conversation changes', async () => {
     $selectedStoredSessionId.set('session-one')
     const selectedCrop = 'data:image/png;base64,c2VsZWN0ZWQ='
