@@ -250,6 +250,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
     bridge_port (3000) / session_path, dm_policy / group_policy (open|allowlist|disabled|pairing), allow_from / group_allow_from, send_read_receipts."""
 
     _DEFAULT_BRIDGE_DIR = None  # resolved in __init__
+    _DEFAULT_GROUP_USER_TOOLSETS = ("web", "vision", "clarify")
     splits_long_messages = True  # send() chunks via truncate_message()
 
     def __init__(self, config: PlatformConfig):
@@ -267,6 +268,19 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         self._allow_from = self._coerce_allow_list(self._select_dm_allowlist(extra, ("WHATSAPP_ALLOWED_USERS",), _wenv))
         self._group_policy = str(extra.get("group_policy") or _wenv("WHATSAPP_GROUP_POLICY", "pairing")).strip().lower()
         self._group_allow_from = self._coerce_allow_list(extra.get("group_allow_from") or extra.get("groupAllowFrom"))
+        self._source_toolset_gating_enabled = (
+            "tool_allow_admin_from" in extra or "group_user_toolsets" in extra
+        )
+        self._tool_allow_admin_from = self._coerce_allow_list(extra.get("tool_allow_admin_from"))
+        configured_group_toolsets = extra.get("group_user_toolsets", self._DEFAULT_GROUP_USER_TOOLSETS)
+        raw_group_toolsets = (
+            configured_group_toolsets
+            if isinstance(configured_group_toolsets, (list, tuple))
+            else str(configured_group_toolsets).split(",")
+        )
+        self._group_user_toolsets = tuple(
+            dict.fromkeys(str(item).strip() for item in raw_group_toolsets if str(item).strip())
+        ) or self._DEFAULT_GROUP_USER_TOOLSETS
         rr = extra.get("send_read_receipts", False)
         self._send_read_receipts = rr if isinstance(rr, bool) else str(rr or "").strip().lower() in {"1", "true", "yes", "on"}
         self._mention_patterns = self._compile_mention_patterns()
@@ -279,6 +293,25 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         self._text_batch_split_delay_seconds = self._coerce_float_extra("text_batch_split_delay_seconds", 10.0)
         self._pending_text_batches: Dict[str, MessageEvent] = {}
         self._pending_text_batch_tasks: Dict[str, asyncio.Task] = {}
+
+    def toolsets_for_source(self, source) -> Optional[list[str]]:
+        """Keep the operator's normal tools while group participants get an explicit safe set.
+
+        This gate is opt-in so existing WhatsApp installations retain their configured platform
+        toolsets. Phone/LID aliases use the same mapping-backed matcher as message intake.
+        """
+        if not self._source_toolset_gating_enabled:
+            return None
+        identities = (
+            str(getattr(source, key, "") or "").strip()
+            for key in ("user_id", "user_id_alt")
+        )
+        if any(
+            identity and self._matches_whatsapp_allowlist(identity, self._tool_allow_admin_from)
+            for identity in identities
+        ):
+            return None
+        return list(self._group_user_toolsets)
 
     def _coerce_float_extra(self, key: str, default: float) -> float:
         """Read a float from ``config.extra``; NaN/Inf/negative/unparseable → ``default`` (fed to asyncio.sleep)."""
