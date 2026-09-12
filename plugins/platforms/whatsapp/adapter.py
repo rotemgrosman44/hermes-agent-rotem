@@ -348,6 +348,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
     bridge_port (3000) / session_path, dm_policy / group_policy (open|allowlist|disabled|pairing), allow_from / group_allow_from, send_read_receipts."""
 
     _DEFAULT_BRIDGE_DIR = None  # resolved in __init__
+    _DEFAULT_GROUP_USER_TOOLSETS = ("web", "vision", "clarify")
     splits_long_messages = True  # send() chunks via truncate_message()
 
     def __init__(self, config: PlatformConfig):
@@ -380,6 +381,19 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         _, raw_groups = self._select_allowlist(
             extra, ("group_allow_from", "groupAllowFrom"), ("WHATSAPP_GROUP_ALLOW_FROM", "WHATSAPP_GROUP_ALLOWED_USERS"), _wenv)
         self._group_allow_from = self._coerce_allow_list(raw_groups)
+        self._source_toolset_gating_enabled = (
+            "tool_allow_admin_from" in extra or "group_user_toolsets" in extra
+        )
+        self._tool_allow_admin_from = self._coerce_allow_list(extra.get("tool_allow_admin_from"))
+        configured_group_toolsets = extra.get("group_user_toolsets", self._DEFAULT_GROUP_USER_TOOLSETS)
+        raw_group_toolsets = (
+            configured_group_toolsets
+            if isinstance(configured_group_toolsets, (list, tuple))
+            else str(configured_group_toolsets).split(",")
+        )
+        self._group_user_toolsets = tuple(
+            dict.fromkeys(str(item).strip() for item in raw_group_toolsets if str(item).strip())
+        ) or self._DEFAULT_GROUP_USER_TOOLSETS
         rr = extra.get("send_read_receipts", False)
         self._send_read_receipts = rr if isinstance(rr, bool) else str(rr or "").strip().lower() in {"1", "true", "yes", "on"}
         self._mention_patterns = self._compile_mention_patterns()
@@ -390,6 +404,25 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         # Text debounce batching: rapid bursts (forwards, paste-splits) would otherwise each trigger a separate agent turn.
         # Telegram cadence and ceilings (#44883); ``0`` dispatches each message immediately.
         self._configure_text_batch_delays()
+
+    def toolsets_for_source(self, source) -> Optional[list[str]]:
+        """Keep the operator's normal tools while group participants get an explicit safe set.
+
+        This gate is opt-in so existing WhatsApp installations retain their configured platform
+        toolsets. Phone/LID aliases use the same mapping-backed matcher as message intake.
+        """
+        if not self._source_toolset_gating_enabled:
+            return None
+        identities = (
+            str(getattr(source, key, "") or "").strip()
+            for key in ("user_id", "user_id_alt")
+        )
+        if any(
+            identity and self._matches_whatsapp_allowlist(identity, self._tool_allow_admin_from)
+            for identity in identities
+        ):
+            return None
+        return list(self._group_user_toolsets)
 
     def _bridge_url(self, path: str) -> str:
         return f"http://127.0.0.1:{self._bridge_port}/{path}"
