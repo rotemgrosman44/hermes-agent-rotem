@@ -113,3 +113,23 @@ def test_should_process_message_dm_phone_allowlist_lid_sender():
         "mentionedIds": [],
     }
     assert adapter._should_process_message(data) is True
+
+
+def test_source_toolsets_keep_owner_full_and_restrict_every_other_sender():
+    """The opt-in source gate resolves owner phone/LID aliases and fails closed for guests."""
+    from types import SimpleNamespace
+    from plugins.platforms.whatsapp.adapter import WhatsAppAdapter
+
+    _write_lid_mapping()
+    adapter = _make_adapter()
+    adapter._source_toolset_gating_enabled = True
+    adapter._tool_allow_admin_from = {PHONE}
+    adapter._group_user_toolsets = ("web", "vision", "clarify")
+
+    owner = SimpleNamespace(user_id=f"{LID}@lid", user_id_alt=None)
+    guest = SimpleNamespace(user_id="999999999999@lid", user_id_alt=None)
+
+    ungated = WhatsAppAdapter(PlatformConfig(enabled=True, extra={}))
+    assert ungated.toolsets_for_source(guest) is None
+    assert adapter.toolsets_for_source(owner) is None
+    assert adapter.toolsets_for_source(guest) == ["web", "vision", "clarify"]

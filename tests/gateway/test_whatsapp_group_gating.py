@@ -163,7 +163,13 @@ def test_config_bridges_whatsapp_dm_and_group_policy(monkeypatch, tmp_path):
         "  dm_policy: disabled\n"
         "  group_policy: allowlist\n"
         "  group_allow_from:\n"
-        "    - \"120363001234567890@g.us\"\n",
+        "    - \"120363001234567890@g.us\"\n"
+        "  tool_allow_admin_from:\n"
+        "    - \"6281234567890\"\n"
+        "  group_user_toolsets:\n"
+        "    - web\n"
+        "    - vision\n"
+        "    - clarify\n",
         encoding="utf-8",
     )
 
@@ -178,6 +184,8 @@ def test_config_bridges_whatsapp_dm_and_group_policy(monkeypatch, tmp_path):
     assert config.platforms[Platform.WHATSAPP].extra["dm_policy"] == "disabled"
     assert config.platforms[Platform.WHATSAPP].extra["group_policy"] == "allowlist"
     assert config.platforms[Platform.WHATSAPP].extra["group_allow_from"] == ["120363001234567890@g.us"]
+    assert config.platforms[Platform.WHATSAPP].extra["tool_allow_admin_from"] == ["6281234567890"]
+    assert config.platforms[Platform.WHATSAPP].extra["group_user_toolsets"] == ["web", "vision", "clarify"]
     assert __import__("os").environ["WHATSAPP_DM_POLICY"] == "disabled"
     assert __import__("os").environ["WHATSAPP_GROUP_POLICY"] == "allowlist"
     assert __import__("os").environ["WHATSAPP_GROUP_ALLOWED_USERS"] == "120363001234567890@g.us"
@@ -228,5 +236,3 @@ def test_broadcast_filter_runs_before_allowlist():
         senderId="34612345678@s.whatsapp.net",
     )
     assert adapter._should_process_message(msg) is False
-
-
