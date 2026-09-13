@@ -1044,6 +1044,10 @@ class TestFTS5Search:
 
         statements = []
         read_conn = db._get_read_conn() or db._conn
+        # _get_read_conn opens a fresh connection; return it to the pool so
+        # searches actually borrow the connection whose statements we trace.
+        if read_conn is not db._conn:
+            db._read_pool.put(read_conn)
         traced_connections = [db._conn]
         if read_conn is not db._conn:
             traced_connections.append(read_conn)
