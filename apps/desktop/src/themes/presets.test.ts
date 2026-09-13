@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { contrastRatio } from './color'
 import {
   BUILTIN_THEME_LIST,
   BUILTIN_THEMES,
@@ -9,7 +10,6 @@ import {
   nousAltTheme,
   readableDarkTheme
 } from './presets'
-import { contrastRatio } from './color'
 
 // #40364: none of the UI text/mono fonts carry emoji glyphs, so every font
 // stack must end with a color-emoji fallback or emoji render as tofu on
