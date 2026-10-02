@@ -6,6 +6,7 @@ import {
   BUILTIN_THEMES,
   DEFAULT_SKIN_NAME,
   DEFAULT_TYPOGRAPHY,
+  nousAltTheme,
   nousTheme,
   readableDarkTheme
 } from './presets'
@@ -70,9 +71,21 @@ describe('theme typography Latin Extended fallback (#61392)', () => {
   })
 })
 
+// The pre-GitHub Nous palette stays available as nous-alt; Readable Dark is
+// the accessibility default for this Omarchy build.
+describe('nous-alt remains available while Readable Dark is the default', () => {
+  it('is registered under its own name and leaves Readable Dark as the default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('readable-dark')
+    expect(BUILTIN_THEMES['nous-alt']).toBe(nousAltTheme)
+    expect(BUILTIN_THEMES.nous).not.toBe(nousAltTheme)
+    expect(nousAltTheme.darkColors?.background).toBe('#0D2F86')
+    expect(BUILTIN_THEMES.nous.darkColors?.background).not.toBe(nousAltTheme.darkColors?.background)
+  })
+})
+
 describe('readable-dark accessibility palette', () => {
-  it('is registered without changing the Nous default', () => {
-    expect(DEFAULT_SKIN_NAME).toBe('nous')
+  it('is registered as the Omarchy default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('readable-dark')
     expect(BUILTIN_THEMES['readable-dark']).toBe(readableDarkTheme)
     expect(BUILTIN_THEMES.nous).not.toBe(readableDarkTheme)
   })

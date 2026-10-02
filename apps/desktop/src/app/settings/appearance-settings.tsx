@@ -171,7 +171,7 @@ function ThemePreview({ name, mode }: { name: string; mode: 'light' | 'dark' }) 
 }
 
 // UI scale presets, as zoom percentages. 100 is Chromium's actual-size
-// baseline; Rotem's Omarchy build defaults to the 165% preset.
+// baseline; Rotem's Omarchy build defaults to the 125% preset.
 const UI_SCALE_PRESETS = ['90', '100', '110', '125', '150', '165', '175'] as const
 const ids = SETTING_IDS.appearance
 type UiScalePreset = (typeof UI_SCALE_PRESETS)[number]
