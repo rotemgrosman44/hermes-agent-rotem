@@ -815,6 +815,9 @@ DEFAULT_CONFIG = {
         # Nous credits status-bar notices (usage bands, grant-spent, depleted/restored). False mutes
         # them; balance data and /usage keep working.
         "credits_notices": True,
+        # One-shot lifecycle status after a successful primary -> fallback model switch. False keeps
+        # retry chatter hidden after recovery but never suppresses a terminal provider failure.
+        "fallback_switch_notice": True,
         # Append a one-line explanation when a turn ends with no usable reply (empty after retries,
         # truncated stream, pending tool result, iteration/budget limit) instead of the bare
         # "(empty)" sentinel.
@@ -1677,6 +1680,9 @@ DEFAULT_CONFIG = {
         # Max due jobs run in parallel per tick. None/0 = unbounded (thread count only); 1 = serial.
         # Env override: HERMES_CRON_MAX_PARALLEL.
         "max_parallel_jobs": None,
+        # Hard wall-clock cap (seconds) for each agent-driven cron run. This is independent
+        # of HERMES_CRON_TIMEOUT, which detects inactivity only. 0 = no hard cap.
+        "max_runtime_seconds": 0,
         # save_job_output keeps the N most recent .md files per job; 0 or negative disables pruning
         # (for externally managed cleanup).
         "output_retention": 50,

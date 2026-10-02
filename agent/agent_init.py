@@ -2262,6 +2262,7 @@ def init_agent(
     for _cb in _CALLBACK_PARAMS:
         setattr(agent, _cb, _params[_cb])
     agent.suppress_status_output = False
+    agent._fallback_switch_notice = agent._read_fallback_switch_notice_from_config()
 
     _set_defaults(agent, _CONTROL_STATE)
 

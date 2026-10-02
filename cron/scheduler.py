@@ -1106,6 +1106,40 @@ _DEFAULT_SCRIPT_TIMEOUT = 3600  # seconds (1 hour)
 _SCRIPT_TIMEOUT = _DEFAULT_SCRIPT_TIMEOUT
 _RUN_CLAIM_HEARTBEAT_SECONDS = 60.0
 _FIRE_CLAIM_HEARTBEAT_GRACE_SECONDS = _RUN_CLAIM_HEARTBEAT_SECONDS * 3
+_CRON_WATCHDOG_POLL_SECONDS = 5.0
+
+
+def _cron_max_runtime_seconds(job: dict) -> float | None:
+    """Return a positive hard wall-clock cap for an agent cron run, if set.
+
+    ``HERMES_CRON_TIMEOUT`` intentionally detects only inactivity. A positive
+    job-local value wins; otherwise the profile's ``cron.max_runtime_seconds``
+    is used. Non-positive, missing, and malformed job values fall back to the
+    profile; a non-positive/missing profile value keeps the historical unlimited
+    wall-clock behavior.
+    """
+    def _positive_seconds(value) -> float | None:
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            return None
+        return seconds if seconds > 0 else None
+
+    job_value = job.get("max_runtime_seconds") if isinstance(job, dict) else None
+    if job_seconds := _positive_seconds(job_value):
+        return job_seconds
+
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config() or {}
+        cron_cfg = cfg.get("cron", {}) if isinstance(cfg, dict) else {}
+        return _positive_seconds(
+            cron_cfg.get("max_runtime_seconds") if isinstance(cron_cfg, dict) else None
+        )
+    except Exception as exc:
+        logger.debug("Failed to load cron max runtime from config: %s", exc)
+        return None
 
 
 def _cron_cleanup_timeout_seconds() -> float:
@@ -1650,15 +1684,33 @@ def _raise_inactivity_timeout(agent, job_name: str, limit_s: float) -> None:
         f"— last activity: {_last_desc}")
 
 
+def _raise_runtime_timeout(agent, job_name: str, limit_s: float, elapsed_s: float) -> None:
+    """Hard-interrupt an over-budget cron run even while it remains active."""
+    _activity = {}
+    if hasattr(agent, "get_activity_summary"):
+        with contextlib.suppress(Exception):
+            _activity = agent.get_activity_summary()
+    logger.error(
+        "Job '%s' exceeded hard runtime %.0fs (limit %.0fs) | last_activity=%s | iteration=%s/%s | tool=%s",
+        job_name, elapsed_s, limit_s,
+        _activity.get("last_activity_desc", "unknown"), _activity.get("api_call_count", 0),
+        _activity.get("max_iterations", 0), _activity.get("current_tool") or "none")
+    request_hard_interrupt(agent, "Cron job exceeded hard runtime limit")
+    raise TimeoutError(
+        f"Cron job '{job_name}' exceeded hard runtime "
+        f"{int(elapsed_s)}s (limit {int(limit_s)}s)")
+
+
 def _run_agent_with_watchdog(
     agent, prompt: str, job: dict, job_id: str, job_name: str, task_id: str, cancel_event,
     worker_state: Optional[dict] = None,
 ) -> dict:
-    """Run ``agent.run_conversation`` on a worker thread under the inactivity (not wall-clock)
-    watchdog: default 600s, override HERMES_CRON_TIMEOUT, 0 = unlimited."""
+    """Run a cron agent under independent inactivity and hard wall-clock caps."""
     _cron_timeout = _cron_inactivity_seconds()
     _cron_inactivity_limit = _cron_timeout if _cron_timeout > 0 else None
-    _POLL_INTERVAL = 5.0
+    _cron_runtime_limit = _cron_max_runtime_seconds(job)
+    _run_started = time.monotonic()
+    _POLL_INTERVAL = _CRON_WATCHDOG_POLL_SECONDS
     # Heartbeat the one-shot run_claim while alive: without it a long run looks like a dead owner
     # and gets re-dispatched / stale-removed out from under the live run.
     # Keep the one-shot run_claim fresh while the run is alive (#62002): the claim TTL is a dead-owner
@@ -1729,7 +1781,7 @@ def _run_agent_with_watchdog(
             # loop / hung ``get_activity_summary`` on this thread can no longer keep the 600s inactivity
             # limit from firing (#94285).
             _watch_thread.start()
-        if _cron_inactivity_limit is None and not _is_oneshot and cancel_event is None:
+        if _cron_inactivity_limit is None and _cron_runtime_limit is None and not _is_oneshot and cancel_event is None:
             result = _cron_future.result()
         else:
             result = None
@@ -1739,6 +1791,10 @@ def _run_agent_with_watchdog(
                     _abort_if_fire_claim_lost()
                     result = _cron_future.result()
                     break
+                if _cron_runtime_limit is not None:
+                    _elapsed = time.monotonic() - _run_started
+                    if _elapsed >= _cron_runtime_limit:
+                        _raise_runtime_timeout(agent, job_name, _cron_runtime_limit, _elapsed)
                 if _inactivity_timeout:
                     break
                 _abort_if_fire_claim_lost()
