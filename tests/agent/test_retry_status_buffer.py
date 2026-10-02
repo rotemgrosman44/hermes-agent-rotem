@@ -164,6 +164,32 @@ def test_pending_fallback_notice_emits_all_switches_in_order():
     assert agent._pending_fallback_notice is None
 
 
+def test_pending_fallback_notice_can_be_suppressed_by_profile_config(tmp_path, monkeypatch):
+    """A profile-local display flag suppresses only the recovered-switch lifecycle status."""
+    home = tmp_path / "hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text("display:\n  fallback_switch_notice: false\n")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    from hermes_cli import config as config_module
+
+    for name in ("_CONFIG_CACHE", "_config_cache"):
+        cache = getattr(config_module, name, None)
+        if cache is not None and hasattr(cache, "clear"):
+            cache.clear()
+
+    agent = _make_bare_agent()
+    agent._fallback_switch_notice = agent._read_fallback_switch_notice_from_config()
+    emitted = []
+    agent._emit_status = emitted.append
+    agent._pending_fallback_notice = "primary -> fallback"
+
+    agent._emit_pending_fallback_notice()
+
+    assert agent._fallback_switch_notice is False
+    assert emitted == []
+    assert agent._pending_fallback_notice is None
+
+
 def test_pending_fallback_notice_continues_after_callback_error():
     agent = _make_bare_agent()
     attempted = []

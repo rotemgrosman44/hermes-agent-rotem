@@ -16,6 +16,16 @@ logger = logging.getLogger("run_agent")
 class StatusOutputMixin:
     """Status/warning/notice emission and retry-chatter buffering (see module docstring)."""
 
+    @staticmethod
+    def _read_fallback_switch_notice_from_config() -> bool:
+        """Read ``display.fallback_switch_notice``; preserve the visible-switch default on errors."""
+        try:
+            from hermes_cli.config import load_config_readonly
+
+            return bool((load_config_readonly().get("display") or {}).get("fallback_switch_notice", True))
+        except Exception:
+            return True
+
     def _safe_print(self, *args, **kwargs):
         """Print that swallows broken pipes / closed stdout (headless stdout can vanish mid-session);
         routes through ``self._print_fn`` so the CLI can inject an ANSI-aware renderer."""
@@ -167,6 +177,8 @@ class StatusOutputMixin:
             return
         # Clear before emitting so a (swallowed) callback error can't leave a stale re-emit.
         self._pending_fallback_notice = None
+        if not getattr(self, "_fallback_switch_notice", True):
+            return
         for item in notice if isinstance(notice, list) else [notice]:
             try:
                 self._emit_status(str(item))
