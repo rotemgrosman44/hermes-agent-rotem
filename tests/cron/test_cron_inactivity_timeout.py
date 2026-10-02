@@ -15,6 +15,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -47,7 +49,7 @@ class FakeAgent:
         self._interrupted = True
         self._interrupt_msg = msg
 
-    def run_conversation(self, prompt):
+    def run_conversation(self, prompt, **_kwargs):
         """Simulate a quick agent run that finishes immediately."""
         return {"final_response": "Done", "messages": []}
 
@@ -74,7 +76,7 @@ class SlowFakeAgent(FakeAgent):
                 summary["seconds_since_activity"] = 0.0
         return summary
 
-    def run_conversation(self, prompt):
+    def run_conversation(self, prompt, **_kwargs):
         self._start_time = time.time()
         time.sleep(self._run_duration)
         return {"final_response": "Completed after work", "messages": []}
@@ -166,6 +168,36 @@ class TestInactivityTimeout:
         pool.shutdown(wait=False)
 
         assert result["final_response"] == "Done"
+
+    @pytest.mark.parametrize("job_value", [0, -1, "malformed", None])
+    def test_nonpositive_or_invalid_job_cap_falls_back_to_profile(self, monkeypatch, job_value):
+        """A job override only wins when it is a positive duration."""
+        from cron import scheduler
+        import hermes_cli.config as config
+
+        monkeypatch.setattr(
+            config, "load_config", lambda: {"cron": {"max_runtime_seconds": 120}}
+        )
+
+        assert scheduler._cron_max_runtime_seconds(
+            {"max_runtime_seconds": job_value}
+        ) == 120.0
+
+    def test_hard_runtime_cap_interrupts_an_active_agent(self, monkeypatch):
+        """An active tool/model loop cannot evade a wall-clock interval budget."""
+        from cron import scheduler
+
+        agent = SlowFakeAgent(run_duration=2.0, idle_after=None, idle_seconds=0.0)
+        monkeypatch.setattr(scheduler, "_cron_max_runtime_seconds", lambda _job: 0.05)
+        monkeypatch.setattr(scheduler, "_CRON_WATCHDOG_POLL_SECONDS", 0.01)
+
+        with pytest.raises(TimeoutError, match="exceeded hard runtime"):
+            scheduler._run_agent_with_watchdog(
+                agent, "test", {"id": "job"}, "job", "job", "task", None
+            )
+
+        assert agent._interrupted is True
+        assert agent._interrupt_msg == "Cron job exceeded hard runtime limit"
 
     def _parse_cron_timeout(self, raw_value):
         """Mirror the defensive parsing logic from cron/scheduler.py run_job()."""
@@ -305,4 +337,3 @@ class TestInactivityWatchdogLoop:
         stop.set()
         assert result["fired"] is True
         assert not watcher.is_alive()
-
