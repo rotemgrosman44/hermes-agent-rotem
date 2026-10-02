@@ -147,6 +147,15 @@ class TestExtractCacheBustingConfig:
     """Verify _extract_cache_busting_config pulls the documented subset of
     config values that must invalidate the cached agent on change."""
 
+    def test_reads_fallback_switch_notice(self):
+        from gateway.run import GatewayRunner
+
+        out = GatewayRunner._extract_cache_busting_config(
+            {"display": {"fallback_switch_notice": False}}
+        )
+
+        assert out["display.fallback_switch_notice"] is False
+
 
     def test_reads_compression_subkeys(self):
         from gateway.run import GatewayRunner

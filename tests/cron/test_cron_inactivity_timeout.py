@@ -183,6 +183,27 @@ class TestInactivityTimeout:
             {"max_runtime_seconds": job_value}
         ) == 120.0
 
+    def test_positive_job_cap_overrides_profile(self, monkeypatch):
+        from cron import scheduler
+        import hermes_cli.config as config
+
+        monkeypatch.setattr(
+            config, "load_config", lambda: {"cron": {"max_runtime_seconds": 120}}
+        )
+
+        assert scheduler._cron_max_runtime_seconds({"max_runtime_seconds": 45}) == 45.0
+
+    @pytest.mark.parametrize("profile_value", [0, -1, "malformed", None])
+    def test_missing_or_nonpositive_profile_cap_is_unlimited(self, monkeypatch, profile_value):
+        from cron import scheduler
+        import hermes_cli.config as config
+
+        monkeypatch.setattr(
+            config, "load_config", lambda: {"cron": {"max_runtime_seconds": profile_value}}
+        )
+
+        assert scheduler._cron_max_runtime_seconds({}) is None
+
     def test_hard_runtime_cap_interrupts_an_active_agent(self, monkeypatch):
         """An active tool/model loop cannot evade a wall-clock interval budget."""
         from cron import scheduler
