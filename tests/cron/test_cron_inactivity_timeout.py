@@ -175,3 +175,54 @@ def test_sleep_before_watchdog_thread_starts(monkeypatch):
     finally:
         finish.set()
     assert interrupted_at and min(interrupted_at) >= 600.0
+
+
+@pytest.mark.parametrize("job_value", [0, -1, "malformed", None])
+def test_nonpositive_or_invalid_job_cap_falls_back_to_profile(monkeypatch, job_value):
+    """A job override only wins when it is a positive duration."""
+    from cron import scheduler
+    import hermes_cli.config as config
+
+    monkeypatch.setattr(config, "load_config", lambda: {"cron": {"max_runtime_seconds": 120}})
+
+    assert scheduler._cron_max_runtime_seconds({"max_runtime_seconds": job_value}) == 120.0
+
+
+def test_hard_runtime_cap_interrupts_an_active_agent(monkeypatch):
+    """An active tool/model loop cannot evade a wall-clock interval budget."""
+    from cron import scheduler
+
+    finish = threading.Event()
+
+    class ActiveAgent:
+        def __init__(self):
+            self.interrupt_message = None
+
+        def run_conversation(self, _prompt, **_kwargs):
+            finish.wait(2)
+            return {"final_response": "finished"}
+
+        def get_activity_summary(self):
+            return {
+                "seconds_since_activity": 0.0,
+                "last_activity_desc": "tool_call",
+                "current_tool": "web",
+                "api_call_count": 1,
+                "max_iterations": 90,
+            }
+
+        def interrupt(self, message, **_kwargs):
+            self.interrupt_message = message
+            finish.set()
+
+    agent = ActiveAgent()
+    monkeypatch.setattr(scheduler, "_cron_inactivity_seconds", lambda: 0.0)
+    monkeypatch.setattr(scheduler, "_cron_max_runtime_seconds", lambda _job: 0.03)
+    monkeypatch.setattr(scheduler, "_CRON_WATCHDOG_POLL_SECONDS", 0.01)
+
+    with pytest.raises(TimeoutError, match="exceeded hard runtime"):
+        scheduler._run_agent_with_watchdog(
+            agent, "test", {"id": "job"}, "job", "job", "task", None
+        )
+
+    assert agent.interrupt_message == "Cron job exceeded hard runtime limit"
