@@ -5,7 +5,7 @@
  * Chromium actual-size baseline); Chromium's internal unit is the zoom level,
  * where factor = 1.2 ^ level.
  *
- * Rotem's Omarchy build ships with a 165% readable baseline, exposed as an
+ * Rotem's Omarchy build ships with a 125% readable baseline, exposed as an
  * ordinary Appearance preset and reset target.
  */
 
@@ -18,8 +18,8 @@ const MAX_ZOOM_LEVEL = 9
 /** Half Chromium's default step; matching the shortcuts and View menu. */
 export const ZOOM_STEP = 0.1
 
-/** Readable 165% preset. Fresh installs + Actual Size / Ctrl+0. */
-export const DEFAULT_ZOOM_LEVEL = Math.log(1.65) / Math.log(ZOOM_FACTOR_BASE)
+/** Readable 125% preset. Fresh installs + Actual Size / Ctrl+0. */
+export const DEFAULT_ZOOM_LEVEL = Math.log(1.25) / Math.log(ZOOM_FACTOR_BASE)
 
 export function clampZoomLevel(value) {
   if (!Number.isFinite(value)) {

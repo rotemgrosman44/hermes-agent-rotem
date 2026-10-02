@@ -30,10 +30,10 @@ test('storage key stays stable so persisted zoom survives upgrades', () => {
   assert.equal(ZOOM_STORAGE_KEY, 'hermes:desktop:zoomLevel')
 })
 
-test('default zoom matches the Appearance 165% preset', () => {
+test('default zoom matches the Readable Dark 125% preset', () => {
   assert.equal(ZOOM_STEP, 0.1)
-  assert.equal(zoomLevelToPercent(DEFAULT_ZOOM_LEVEL), 165)
-  assert.equal(DEFAULT_ZOOM_LEVEL, percentToZoomLevel(165))
+  assert.equal(zoomLevelToPercent(DEFAULT_ZOOM_LEVEL), 125)
+  assert.equal(DEFAULT_ZOOM_LEVEL, percentToZoomLevel(125))
 })
 
 test('clampZoomLevel rejects garbage and enforces bounds', () => {

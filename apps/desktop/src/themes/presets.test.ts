@@ -41,11 +41,11 @@ describe('theme typography emoji fallback (#40364)', () => {
   })
 })
 
-// The pre-GitHub Nous palette stays available as nous-alt; the default name
-// still means GitHub chrome + brand blue.
-describe('nous-alt is the retired Nous, not the default', () => {
-  it('is registered under its own name and leaves nous as the default', () => {
-    expect(DEFAULT_SKIN_NAME).toBe('nous')
+// The pre-GitHub Nous palette stays available as nous-alt; Readable Dark is
+// the accessibility default for this Omarchy build.
+describe('nous-alt remains available while Readable Dark is the default', () => {
+  it('is registered under its own name and leaves Readable Dark as the default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('readable-dark')
     expect(BUILTIN_THEMES['nous-alt']).toBe(nousAltTheme)
     expect(BUILTIN_THEMES.nous).not.toBe(nousAltTheme)
     expect(nousAltTheme.darkColors?.background).toBe('#0D2F86')
@@ -54,8 +54,8 @@ describe('nous-alt is the retired Nous, not the default', () => {
 })
 
 describe('readable-dark accessibility palette', () => {
-  it('is registered without changing the Nous default', () => {
-    expect(DEFAULT_SKIN_NAME).toBe('nous')
+  it('is registered as the Omarchy default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('readable-dark')
     expect(BUILTIN_THEMES['readable-dark']).toBe(readableDarkTheme)
     expect(BUILTIN_THEMES.nous).not.toBe(readableDarkTheme)
   })
