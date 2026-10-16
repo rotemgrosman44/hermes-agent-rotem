@@ -181,7 +181,7 @@ def test_sleep_before_watchdog_thread_starts(monkeypatch):
 def test_nonpositive_or_invalid_job_cap_falls_back_to_profile(monkeypatch, job_value):
     """A job override only wins when it is a positive duration."""
     from cron import scheduler
-    import hermes_cli.config as config
+    from hermes_cli import config
 
     monkeypatch.setattr(config, "load_config", lambda: {"cron": {"max_runtime_seconds": 120}})
 
@@ -190,7 +190,7 @@ def test_nonpositive_or_invalid_job_cap_falls_back_to_profile(monkeypatch, job_v
 
 def test_positive_job_cap_overrides_profile(monkeypatch):
     from cron import scheduler
-    import hermes_cli.config as config
+    from hermes_cli import config
 
     monkeypatch.setattr(config, "load_config", lambda: {"cron": {"max_runtime_seconds": 120}})
 
@@ -200,7 +200,7 @@ def test_positive_job_cap_overrides_profile(monkeypatch):
 @pytest.mark.parametrize("profile_value", [0, -1, "malformed", None])
 def test_missing_or_nonpositive_profile_cap_is_unlimited(monkeypatch, profile_value):
     from cron import scheduler
-    import hermes_cli.config as config
+    from hermes_cli import config
 
     monkeypatch.setattr(config, "load_config", lambda: {"cron": {"max_runtime_seconds": profile_value}})
 
