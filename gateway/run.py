@@ -1650,16 +1650,30 @@ def _cron_tick_profile_homes(config: object) -> list[tuple[str, Path]]:
     <name>`` gateway's own profile may sit outside ``profiles/`` (custom HERMES_HOME). One host
     process ticks all of them regardless of ``gateway.multiplex_profiles``. Adapter startup
     already skips ``active``."""
-    from hermes_cli.profiles import get_active_profile_name, get_profile_dir
+    from hermes_cli.profiles import get_active_profile_name
+    from hermes_constants import get_hermes_home
 
     homes = _multiplex_profile_homes(config)
     active = get_active_profile_name() or "default"  # launch profile, pre-identity (ticker boot)
+    # A launcher may select a named profile whose directory is a symlink to an external
+    # HERMES_HOME.  In that case get_active_profile_name() correctly reports ``custom``;
+    # rebuilding the path as profiles/custom drops the launch store from the tick set.
+    # The active home is already authoritative, so compare and append that exact path.
+    active_home = Path(get_hermes_home())
+    try:
+        active_key = active_home.resolve()
+    except OSError:
+        active_key = active_home.absolute()
+    for _name, home in homes:
+        try:
+            home_key = Path(home).resolve()
+        except OSError:
+            home_key = Path(home).absolute()
+        if home_key == active_key:
+            return homes
     if any(name == active for name, _home in homes):
         return homes
-    try:
-        return homes + [(active, get_profile_dir(active))]
-    except Exception:
-        return homes
+    return homes + [(active, active_home)]
 
 
 def _cron_profile_gate(name: str, home: Path) -> bool:

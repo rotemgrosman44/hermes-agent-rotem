@@ -63,6 +63,26 @@ def test_cron_tick_homes_include_active_named_host(tmp_path, monkeypatch):
     assert cron_by_name["host"] == default_home / "profiles" / "host"
 
 
+def test_cron_tick_homes_include_external_active_home(tmp_path, monkeypatch):
+    """A named-profile symlink may resolve outside ``profiles/`` and therefore identify as
+    ``custom``.  Cron must tick that real launch home, not a fabricated profiles/custom path."""
+    default_home = tmp_path / ".hermes"
+    external_home = tmp_path / "external-ilindex"
+    external_home.mkdir(parents=True)
+    (external_home / "config.yaml").write_text("{}\n")
+
+    import gateway.run as gateway_run
+    monkeypatch.setattr(
+        gateway_run, "_multiplex_profile_homes", lambda _cfg: [("default", default_home)])
+    monkeypatch.setattr("hermes_cli.profiles.get_active_profile_name", lambda: "custom")
+    monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: external_home)
+
+    homes = gateway_run._cron_tick_profile_homes(GatewayConfig(multiplex_profiles=False))
+
+    assert ("custom", external_home) in homes
+    assert all(home != default_home / "profiles" / "custom" for _name, home in homes)
+
+
 class TestNamedProfileMultiplexerGuard:
     """_guard_named_profile_under_multiplexer is inert unless all conditions hold."""
 
@@ -151,5 +171,3 @@ class TestNamedProfileMultiplexerGuard:
 
         monkeypatch.setattr(gw, "_profile_suffix", lambda: "")
         assert gw.named_profile_served_by_running_multiplexer() is False
-
-
