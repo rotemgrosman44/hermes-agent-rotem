@@ -32,6 +32,10 @@ def test_cron_profile_homes_serve_every_live_profile(tmp_path, monkeypatch):
         (default_home / "profiles" / name / "config.yaml").write_text("{}\n")  # identity marker
     from hermes_constants import mark_named_profile_deleted
     mark_named_profile_deleted(default_home / "profiles" / "gone")
+    # This production checkout lives inside ~/.hermes beside a sealed-payload
+    # manifest.  The unit test must not inspect that real installation while
+    # importing gateway.run; its dependency environment is irrelevant here.
+    monkeypatch.setattr("pm.environments._payload_manifest", lambda _root: None)
 
     import gateway.run as gateway_run
 
@@ -49,6 +53,7 @@ def test_cron_tick_homes_include_active_named_host(tmp_path, monkeypatch):
         (default_home / "profiles" / name).mkdir(parents=True)
         (default_home / "profiles" / name / "config.yaml").write_text("{}\n")  # identity marker
     monkeypatch.setenv("HERMES_HOME", str(default_home / "profiles" / "host"))
+    monkeypatch.setattr("pm.environments._payload_manifest", lambda _root: None)
 
     import gateway.run as gateway_run
 
@@ -70,6 +75,7 @@ def test_cron_tick_homes_include_external_active_home(tmp_path, monkeypatch):
     external_home = tmp_path / "external-ilindex"
     external_home.mkdir(parents=True)
     (external_home / "config.yaml").write_text("{}\n")
+    monkeypatch.setattr("pm.environments._payload_manifest", lambda _root: None)
 
     import gateway.run as gateway_run
     monkeypatch.setattr(
